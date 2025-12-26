@@ -1,4 +1,4 @@
-#include "motor_ros2/motor_cfg.h"
+#include "zrobot_bridge/motor_cfg.h"
 
 void RobStrideMotor::init_socket()
 {
@@ -21,22 +21,21 @@ void RobStrideMotor::init_socket()
     addr.can_family = AF_CAN;
     addr.can_ifindex = ifr.ifr_ifindex;
 
-    if (bind(socket_fd, (struct sockaddr *)&addr, sizeof(addr)) < 0)
+    if (bind(socket_fd, (struct sockaddr*)&addr, sizeof(addr)) < 0)
     {
         perror("bind");
         exit(1);
     }
 
     struct can_filter rfilter[1];
-    rfilter[0].can_id   = (motor_id << 8) | CAN_EFF_FLAG;   // Bit8~Bit15 放电机ID，高位扩展帧标志
-    rfilter[0].can_mask = (0xFF << 8) | CAN_EFF_FLAG;          // 只匹配 Bit8~Bit15 + 扩展帧标志
+    rfilter[0].can_id = (motor_id << 8) | CAN_EFF_FLAG; // Bit8~Bit15 放电机ID，高位扩展帧标志
+    rfilter[0].can_mask = (0xFF << 8) | CAN_EFF_FLAG; // 只匹配 Bit8~Bit15 + 扩展帧标志
 
-    if (setsockopt(socket_fd, SOL_CAN_RAW, CAN_RAW_FILTER, &rfilter, sizeof(rfilter)) < 0) 
+    if (setsockopt(socket_fd, SOL_CAN_RAW, CAN_RAW_FILTER, &rfilter, sizeof(rfilter)) < 0)
     {
         perror("setsockopt filter");
         exit(1);
     }
-
 }
 
 void RobStrideMotor::receive_status_frame()
@@ -73,68 +72,69 @@ void RobStrideMotor::receive_status_frame()
         uint16_t temperature_u16 = (data[6] << 8) | data[7];
 
         // 转换成物理量
-        position_ = ((static_cast<float>(position_u16) / 32767.0f) - 1.0f) * (ACTUATOR_OPERATION_MAPPING.at(static_cast<ActuatorType>(actuator_type)).position);
-        velocity_ = ((static_cast<float>(velocity_u16) / 32767.0f) - 1.0f) * (ACTUATOR_OPERATION_MAPPING.at(static_cast<ActuatorType>(actuator_type)).velocity);
-        torque_ = ((static_cast<float>(torque_i16) / 32767.0f) - 1.0f) * (ACTUATOR_OPERATION_MAPPING.at(static_cast<ActuatorType>(actuator_type)).torque);
+        position_ = ((static_cast<float>(position_u16) / 32767.0f) - 1.0f) * (ACTUATOR_OPERATION_MAPPING.at(
+            static_cast<ActuatorType>(actuator_type)).position);
+        velocity_ = ((static_cast<float>(velocity_u16) / 32767.0f) - 1.0f) * (ACTUATOR_OPERATION_MAPPING.at(
+            static_cast<ActuatorType>(actuator_type)).velocity);
+        torque_ = ((static_cast<float>(torque_i16) / 32767.0f) - 1.0f) * (ACTUATOR_OPERATION_MAPPING.at(
+            static_cast<ActuatorType>(actuator_type)).torque);
         temperature_ = static_cast<float>(temperature_u16) * 0.1f;
-
     }
-    else if(communication_type == 17)
+    else if (communication_type == 17)
     {
         params.data = uint8_t(data[4]);
         std::cout << params.data << std::endl;
         params.index = 0X7005;
         for (int index_num = 0; index_num <= 13; index_num++)
         {
-            if ((data[1]<<8|data[0]) == Index_List[index_num])
-                switch(index_num)
+            if ((data[1] << 8 | data[0]) == Index_List[index_num])
+                switch (index_num)
                 {
-                    case 0:
-                        drw.run_mode.data = uint8_t(data[4]);
-                        std::cout << "mode data: " << static_cast<int>(data[4]) << std::endl;;
-                        break;
-                    case 1:
-                        drw.iq_ref.data = Byte_to_float(data);
-                        break;
-                    case 2:
-                        drw.spd_ref.data = Byte_to_float(data);
-                        break;
-                    case 3:
-                        drw.imit_torque.data = Byte_to_float(data);
-                        break;
-                    case 4:
-                        drw.cur_kp.data = Byte_to_float(data);
-                        break;
-                    case 5:
-                        drw.cur_ki.data = Byte_to_float(data);
-                        break;
-                    case 6:
-                        drw.cur_filt_gain.data = Byte_to_float(data);
-                        break;
-                    case 7:
-                        drw.loc_ref.data = Byte_to_float(data);
-                        break;
-                    case 8:
-                        drw.limit_spd.data = Byte_to_float(data);
-                        break;
-                    case 9:
-                        drw.limit_cur.data = Byte_to_float(data);
-                        break;	
-                    case 10:
-                        drw.mechPos.data = Byte_to_float(data);
-                        break;	
-                    case 11:
-                        drw.iqf.data = Byte_to_float(data);
-                        break;	
-                    case 12:
-                        drw.mechVel.data =Byte_to_float(data);
-                        break;	
-                    case 13:
-                        drw.VBUS.data = Byte_to_float(data);
-                        break;	
+                case 0:
+                    drw.run_mode.data = uint8_t(data[4]);
+                    std::cout << "mode data: " << static_cast<int>(data[4]) << std::endl;;
+                    break;
+                case 1:
+                    drw.iq_ref.data = Byte_to_float(data);
+                    break;
+                case 2:
+                    drw.spd_ref.data = Byte_to_float(data);
+                    break;
+                case 3:
+                    drw.imit_torque.data = Byte_to_float(data);
+                    break;
+                case 4:
+                    drw.cur_kp.data = Byte_to_float(data);
+                    break;
+                case 5:
+                    drw.cur_ki.data = Byte_to_float(data);
+                    break;
+                case 6:
+                    drw.cur_filt_gain.data = Byte_to_float(data);
+                    break;
+                case 7:
+                    drw.loc_ref.data = Byte_to_float(data);
+                    break;
+                case 8:
+                    drw.limit_spd.data = Byte_to_float(data);
+                    break;
+                case 9:
+                    drw.limit_cur.data = Byte_to_float(data);
+                    break;
+                case 10:
+                    drw.mechPos.data = Byte_to_float(data);
+                    break;
+                case 11:
+                    drw.iqf.data = Byte_to_float(data);
+                    break;
+                case 12:
+                    drw.mechVel.data = Byte_to_float(data);
+                    break;
+                case 13:
+                    drw.VBUS.data = Byte_to_float(data);
+                    break;
                 }
-		}
-
+        }
     }
     else
     {
@@ -198,7 +198,7 @@ std::tuple<float, float, float, float> RobStrideMotor::enable_motor()
         std::cout << "[✓] Motor enable command sent." << std::endl;
     }
     receive_status_frame();
-    
+
     return std::make_tuple(position_, velocity_, torque_, temperature_);
 }
 
@@ -220,9 +220,9 @@ std::tuple<float, float, float, float> RobStrideMotor::send_motion_command(float
                                                                            float kp,
                                                                            float kd)
 {
-    if(drw.run_mode.data != 0 && pattern == 2)
+    if (drw.run_mode.data != 0 && pattern == 2)
     {
-        Disenable_Motor(0);        
+        Disenable_Motor(0);
         usleep(1000);
 
         Set_RobStrite_Motor_parameter(0X7005, move_control_mode, Set_mode);
@@ -232,15 +232,23 @@ std::tuple<float, float, float, float> RobStrideMotor::send_motion_command(float
         usleep(1000);
     }
     struct can_frame frame{};
-    frame.can_id = (Communication_Type_MotionControl << 24) | (float_to_uint(torque, -ACTUATOR_OPERATION_MAPPING.at(static_cast<ActuatorType>(actuator_type)).torque, ACTUATOR_OPERATION_MAPPING.at(static_cast<ActuatorType>(actuator_type)).torque, 16) << 8) | motor_id;
+    frame.can_id = (Communication_Type_MotionControl << 24) | (float_to_uint(
+        torque, -ACTUATOR_OPERATION_MAPPING.at(static_cast<ActuatorType>(actuator_type)).torque,
+        ACTUATOR_OPERATION_MAPPING.at(static_cast<ActuatorType>(actuator_type)).torque, 16) << 8) | motor_id;
     frame.can_id |= CAN_EFF_FLAG; // 扩展帧
     // frame.can_id = 0x1200fd01;
     frame.can_dlc = 8;
 
-    uint16_t pos = float_to_uint(position_rad, -ACTUATOR_OPERATION_MAPPING.at(static_cast<ActuatorType>(actuator_type)).position, ACTUATOR_OPERATION_MAPPING.at(static_cast<ActuatorType>(actuator_type)).position, 16);
-    uint16_t vel = float_to_uint(velocity_rad_s, -ACTUATOR_OPERATION_MAPPING.at(static_cast<ActuatorType>(actuator_type)).velocity, ACTUATOR_OPERATION_MAPPING.at(static_cast<ActuatorType>(actuator_type)).velocity, 16);
-    uint16_t kp_u = float_to_uint(kp, 0.0f, ACTUATOR_OPERATION_MAPPING.at(static_cast<ActuatorType>(actuator_type)).kp, 16);
-    uint16_t kd_u = float_to_uint(kd, 0.0f, ACTUATOR_OPERATION_MAPPING.at(static_cast<ActuatorType>(actuator_type)).kd, 16);
+    uint16_t pos = float_to_uint(position_rad,
+                                 -ACTUATOR_OPERATION_MAPPING.at(static_cast<ActuatorType>(actuator_type)).position,
+                                 ACTUATOR_OPERATION_MAPPING.at(static_cast<ActuatorType>(actuator_type)).position, 16);
+    uint16_t vel = float_to_uint(velocity_rad_s,
+                                 -ACTUATOR_OPERATION_MAPPING.at(static_cast<ActuatorType>(actuator_type)).velocity,
+                                 ACTUATOR_OPERATION_MAPPING.at(static_cast<ActuatorType>(actuator_type)).velocity, 16);
+    uint16_t kp_u = float_to_uint(kp, 0.0f, ACTUATOR_OPERATION_MAPPING.at(static_cast<ActuatorType>(actuator_type)).kp,
+                                  16);
+    uint16_t kd_u = float_to_uint(kd, 0.0f, ACTUATOR_OPERATION_MAPPING.at(static_cast<ActuatorType>(actuator_type)).kd,
+                                  16);
 
     frame.data[0] = (pos >> 8);
     frame.data[1] = pos;
@@ -264,7 +272,7 @@ std::tuple<float, float, float, float> RobStrideMotor::send_motion_command(float
 
 std::tuple<float, float, float, float> RobStrideMotor::send_velocity_mode_command(float velocity_rad_s)
 {
-    if(drw.run_mode.data != 2 && pattern == 2)
+    if (drw.run_mode.data != 2 && pattern == 2)
     {
         Disenable_Motor(0);
         std::cout << "disable motor " << std::endl;
@@ -276,7 +284,7 @@ std::tuple<float, float, float, float> RobStrideMotor::send_velocity_mode_comman
         enable_motor();
         Set_RobStrite_Motor_parameter(0X7018, 27.0f, Set_parameter);
         usleep(1000);
-        Set_RobStrite_Motor_parameter(0X7026, Motor_Set_All.set_acc,   Set_parameter);
+        Set_RobStrite_Motor_parameter(0X7026, Motor_Set_All.set_acc, Set_parameter);
         usleep(1000);
     }
     std::cout << "excute vel_mode" << std::endl;
@@ -333,7 +341,7 @@ void RobStrideMotor::Get_RobStrite_Motor_parameter(uint16_t Index)
     frame.can_dlc = 8;
 
     frame.data[0] = Index;
-    frame.data[1] = Index>>8;
+    frame.data[1] = Index >> 8;
     frame.data[2] = 0x00;
     frame.data[3] = 0x00;
     frame.data[4] = 0x00;
@@ -348,13 +356,13 @@ void RobStrideMotor::Get_RobStrite_Motor_parameter(uint16_t Index)
     }
     std::cout << "excute Get_motor_params" << std::endl;
     receive_status_frame();
-
 }
 
 // 位置模式（CSP）
-std::tuple<float, float, float, float> RobStrideMotor::RobStrite_Motor_PosPP_control(float Speed, float Acceleration, float Angle)
+std::tuple<float, float, float, float> RobStrideMotor::RobStrite_Motor_PosPP_control(
+    float Speed, float Acceleration, float Angle)
 {
-    if(drw.run_mode.data != 1 && pattern == 2)
+    if (drw.run_mode.data != 1 && pattern == 2)
     {
         Disenable_Motor(0);
         usleep(1000);
@@ -366,26 +374,26 @@ std::tuple<float, float, float, float> RobStrideMotor::RobStrite_Motor_PosPP_con
         usleep(1000);
     }
 
-	Motor_Set_All.set_speed = Speed;
-	Motor_Set_All.set_acc   = Acceleration;
-	Motor_Set_All.set_angle = Angle;
+    Motor_Set_All.set_speed = Speed;
+    Motor_Set_All.set_acc = Acceleration;
+    Motor_Set_All.set_angle = Angle;
 
-	Set_RobStrite_Motor_parameter(0X7025, Motor_Set_All.set_speed, Set_parameter);
+    Set_RobStrite_Motor_parameter(0X7025, Motor_Set_All.set_speed, Set_parameter);
     usleep(1000);
 
-	Set_RobStrite_Motor_parameter(0X7026, Motor_Set_All.set_acc,   Set_parameter);
+    Set_RobStrite_Motor_parameter(0X7026, Motor_Set_All.set_acc, Set_parameter);
     usleep(1000);
 
-	Set_RobStrite_Motor_parameter(0X7016, Motor_Set_All.set_angle, Set_parameter);
+    Set_RobStrite_Motor_parameter(0X7016, Motor_Set_All.set_angle, Set_parameter);
     usleep(1000);
 
     return std::make_tuple(position_, velocity_, torque_, temperature_);
 }
 
 // 电流模式
-std::tuple<float, float, float, float> RobStrideMotor::RobStrite_Motor_Current_control(float IqCommand, float IdCommand) 
+std::tuple<float, float, float, float> RobStrideMotor::RobStrite_Motor_Current_control(float IqCommand, float IdCommand)
 {
-    if(drw.run_mode.data != 3)
+    if (drw.run_mode.data != 3)
     {
         Disenable_Motor(0);
         usleep(1000);
@@ -409,12 +417,11 @@ std::tuple<float, float, float, float> RobStrideMotor::RobStrite_Motor_Current_c
     usleep(1000);
 
     return std::make_tuple(position_, velocity_, torque_, temperature_);
-
 }
 
 void RobStrideMotor::RobStrite_Motor_Set_Zero_control()
 {
-	Set_RobStrite_Motor_parameter(0X7005, Set_Zero_mode, Set_mode);					//设置电机模式
+    Set_RobStrite_Motor_parameter(0X7005, Set_Zero_mode, Set_mode); //设置电机模式
 }
 
 void RobStrideMotor::Disenable_Motor(uint8_t clear_error)
@@ -449,10 +456,10 @@ void RobStrideMotor::Disenable_Motor(uint8_t clear_error)
 
 void RobStrideMotor::Set_CAN_ID(uint8_t Set_CAN_ID)
 {
-	Disenable_Motor(0);
+    Disenable_Motor(0);
 
     struct can_frame frame{};
-    frame.can_id = (Communication_Type_Can_ID<<24) | (Set_CAN_ID<<16) | (master_id << 8) | motor_id;
+    frame.can_id = (Communication_Type_Can_ID << 24) | (Set_CAN_ID << 16) | (master_id << 8) | motor_id;
     frame.can_id |= CAN_EFF_FLAG; // 扩展帧
     frame.can_dlc = 8;
     memset(frame.data, 0, 8);
@@ -477,31 +484,35 @@ void RobStrideMotor::Set_CAN_ID(uint8_t Set_CAN_ID)
         std::cout << "[✓] Motor Set_ZeroPos command sent." << std::endl;
     }
 }
+
 //5.位置模式（CSP）
 std::tuple<float, float, float, float> RobStrideMotor::RobStrite_Motor_PosCSP_control(float Speed, float Angle)
 {
-	Motor_Set_All.set_speed = Speed;
-	Motor_Set_All.set_angle = Angle;
-	if (drw.run_mode.data != 5 && pattern == 2)
-	{
+    Motor_Set_All.set_speed = Speed;
+    Motor_Set_All.set_angle = Angle;
+    if (drw.run_mode.data != 5 && pattern == 2)
+    {
         Disenable_Motor(0);
         usleep(1000);
-		Set_RobStrite_Motor_parameter(0X7005, PosCSP_control_mode, Set_mode);		//设置电机模式
+        Set_RobStrite_Motor_parameter(0X7005, PosCSP_control_mode, Set_mode); //设置电机模式
         usleep(1000);
 
-		Get_RobStrite_Motor_parameter(0x7005);
+        Get_RobStrite_Motor_parameter(0x7005);
         usleep(1000);
 
         enable_motor();
         usleep(1000);
 
-		Motor_Set_All.set_motor_mode = PosCSP_control_mode;
-	}
-	Motor_Set_All.set_speed = float_to_uint(Motor_Set_All.set_speed, -ACTUATOR_OPERATION_MAPPING.at(static_cast<ActuatorType>(actuator_type)).velocity, ACTUATOR_OPERATION_MAPPING.at(static_cast<ActuatorType>(actuator_type)).velocity, 16);
-	Set_RobStrite_Motor_parameter(0X7017, Motor_Set_All.set_speed, Set_parameter);
+        Motor_Set_All.set_motor_mode = PosCSP_control_mode;
+    }
+    Motor_Set_All.set_speed = float_to_uint(Motor_Set_All.set_speed,
+                                            -ACTUATOR_OPERATION_MAPPING.at(static_cast<ActuatorType>(actuator_type)).
+                                                                        velocity, ACTUATOR_OPERATION_MAPPING.at(
+                                                static_cast<ActuatorType>(actuator_type)).velocity, 16);
+    Set_RobStrite_Motor_parameter(0X7017, Motor_Set_All.set_speed, Set_parameter);
     usleep(1000);
 
-	Set_RobStrite_Motor_parameter(0X7016, Motor_Set_All.set_angle, Set_parameter);
+    Set_RobStrite_Motor_parameter(0X7016, Motor_Set_All.set_angle, Set_parameter);
     usleep(1000);
 
     return std::make_tuple(position_, velocity_, torque_, temperature_);
@@ -509,16 +520,15 @@ std::tuple<float, float, float, float> RobStrideMotor::RobStrite_Motor_PosCSP_co
 
 void RobStrideMotor::Set_ZeroPos()
 {
-	Disenable_Motor(0);
+    Disenable_Motor(0);
 
-    if(drw.run_mode.data != 4)
+    if (drw.run_mode.data != 4)
     {
         Set_RobStrite_Motor_parameter(0X7005, Speed_control_mode, Set_mode);
         usleep(1000);
 
         Get_RobStrite_Motor_parameter(0x7005);
         usleep(1000);
-
     }
 
     struct can_frame frame{};
@@ -547,5 +557,5 @@ void RobStrideMotor::Set_ZeroPos()
         std::cout << "[✓] Motor Set_ZeroPos command sent." << std::endl;
     }
 
-	enable_motor();
+    enable_motor();
 }

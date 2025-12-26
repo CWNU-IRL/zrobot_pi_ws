@@ -1,0 +1,10 @@
+# 请求：23个电机目标位置（rad）。电机CAN ID由节点参数 motor_ids[23] 决定。
+float32[23] positions
+---
+# 响应：对应电机的反馈
+float32[23] feedback_positions
+float32[23] feedback_velocities
+float32[23] feedback_torques
+float32[23] feedback_temperatures
+bool success
+string message
