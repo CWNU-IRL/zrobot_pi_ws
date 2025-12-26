@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.8)
-project(zrobot_bridge)
+project(rs_interface)
 
 if(CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
   add_compile_options(-Wall -Wextra -Wpedantic)
@@ -7,10 +7,11 @@ endif()
 
 # find dependencies
 find_package(ament_cmake REQUIRED)
-find_package(rs_interface REQUIRED)
+find_package(rosidl_default_generators REQUIRED)
 
-find_package(rclcpp REQUIRED)
-
+rosidl_generate_interfaces(${PROJECT_NAME}
+  "srv/RobStrideMsgs.srv")
+  
 if(BUILD_TESTING)
   find_package(ament_lint_auto REQUIRED)
   # the following line skips the linter which checks for copyrights
@@ -22,26 +23,5 @@ if(BUILD_TESTING)
   set(ament_cmake_cpplint_FOUND TRUE)
   ament_lint_auto_find_test_dependencies()
 endif()
-# 添加可执行文件 - 主控制节点
-add_executable(motor_controller_node src/motor_controller_node.cpp src/motor_cfg.cpp)
-
-# 连接目标库
-target_include_directories(motor_controller_node PRIVATE include)
-ament_target_dependencies(motor_controller_node rclcpp rs_interface)
-
-# 安装可执行文件
-install(TARGETS motor_controller_node DESTINATION lib/${PROJECT_NAME})
-
-# 安装launch文件
-install(DIRECTORY launch/
-  DESTINATION share/${PROJECT_NAME}/launch)
-
-# 安装配置文件
-install(DIRECTORY config/
-  DESTINATION share/${PROJECT_NAME}/config)
-
-# 安装头文件
-install(DIRECTORY include/
-  DESTINATION include)
 
 ament_package()
