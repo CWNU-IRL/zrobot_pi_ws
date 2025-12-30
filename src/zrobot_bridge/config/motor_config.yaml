@@ -1,20 +1,20 @@
-/**
- * @file motor_config.yaml
- * @brief 电机控制节点配置文件
- * 
- * 配置说明：
- * - can_interface: CAN网络接口名称（如can0）
- * - master_id: 主机ID（通常为0）
- * - motor_can_ids: 23个电机的CAN ID数组，顺序对应电机索引0-22
- * - motor_types: 23个电机的类型数组，类型定义见motor_cfg.h中的ActuatorType
- *   - 0: ROBSTRIDE_00
- *   - 1: ROBSTRIDE_01
- *   - 2: ROBSTRIDE_02
- *   - 3: ROBSTRIDE_03
- *   - 4: ROBSTRIDE_04
- *   - 5: ROBSTRIDE_05
- *   - 6: ROBSTRIDE_06
- */
+# /**
+#  * @file motor_config.yaml
+#  * @brief 电机控制节点配置文件
+#  * 
+#  * 配置说明：
+#  * - can_interface: CAN网络接口名称（如can0）
+#  * - master_id: 主机ID（通常为0）
+#  * - motor_can_ids: 23个电机的CAN ID数组，顺序对应电机索引0-22
+#  * - motor_types: 23个电机的类型数组，类型定义见motor_cfg.h中的ActuatorType
+#  *   - 0: ROBSTRIDE_00
+#  *   - 1: ROBSTRIDE_01
+#  *   - 2: ROBSTRIDE_02
+#  *   - 3: ROBSTRIDE_03
+#  *   - 4: ROBSTRIDE_04
+#  *   - 5: ROBSTRIDE_05
+#  *   - 6: ROBSTRIDE_06
+#  */
 
 motor_controller_node:
   ros__parameters:
