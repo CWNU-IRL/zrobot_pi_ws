@@ -32,9 +32,6 @@ private:
     // 从参数服务器获取电机配置
     bool load_motor_configuration();
 
-    // CAN接口名称
-    std::string can_interface_;
-
     // 主机ID
     uint8_t master_id_;
 
@@ -49,6 +46,9 @@ private:
 
     // 电机类型映射：index -> ActuatorType
     std::array<int, NUM_MOTORS> motor_types_;
+
+    // 电机CAN接口映射：index -> CAN interface name
+    std::array<std::string, NUM_MOTORS> motor_can_interfaces_;
 
     // 服务提供者
     rclcpp::Service<rs_interface::srv::RobStrideMsgs>::SharedPtr service_;

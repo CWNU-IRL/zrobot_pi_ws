@@ -9,17 +9,17 @@ MotorControllerNode::MotorControllerNode()
     RCLCPP_INFO(logger_, "初始化电机控制节点");
 
     // 声明参数
-    this->declare_parameter("can_interface", "can0");
     this->declare_parameter("master_id", 0);
     this->declare_parameter<std::vector<int64_t>>("motor_can_ids", std::vector<int64_t>(NUM_MOTORS, 0));
     this->declare_parameter<std::vector<int64_t>>("motor_types", std::vector<int64_t>(NUM_MOTORS, 0));
+    this->declare_parameter<std::vector<std::string>>("motor_can_interfaces", std::vector<std::string>(NUM_MOTORS, "can0"));
 
     // 获取参数
-    can_interface_ = this->get_parameter("can_interface").as_string();
     master_id_ = static_cast<uint8_t>(this->get_parameter("master_id").as_int());
 
     auto can_ids_param = this->get_parameter("motor_can_ids").as_integer_array();
     auto types_param = this->get_parameter("motor_types").as_integer_array();
+    auto interfaces_param = this->get_parameter("motor_can_interfaces").as_string_array();
 
     // 验证参数
     if (can_ids_param.size() != NUM_MOTORS)
@@ -54,7 +54,22 @@ MotorControllerNode::MotorControllerNode()
         }
     }
 
-    RCLCPP_INFO(logger_, "CAN接口: %s", can_interface_.c_str());
+    if (interfaces_param.size() != NUM_MOTORS)
+    {
+        RCLCPP_WARN(logger_, "电机CAN接口列表大小不正确，默认使用can0");
+        for (int i = 0; i < NUM_MOTORS; ++i)
+        {
+            motor_can_interfaces_[i] = "can0";
+        }
+    }
+    else
+    {
+        for (int i = 0; i < NUM_MOTORS; ++i)
+        {
+            motor_can_interfaces_[i] = interfaces_param[i];
+        }
+    }
+
     RCLCPP_INFO(logger_, "主机ID: %d", master_id_);
 
     // 初始化电机
@@ -101,12 +116,13 @@ void MotorControllerNode::initialize_motors()
         {
             uint8_t can_id = motor_can_ids_[i];
             int motor_type = motor_types_[i];
+            std::string can_interface = motor_can_interfaces_[i];
 
             motors_[i] = std::make_shared<RobStrideMotor>(
-                can_interface_, master_id_, can_id, motor_type);
+                can_interface, master_id_, can_id, motor_type);
 
-            RCLCPP_DEBUG(logger_, "电机%d初始化成功 (CAN ID: %d, 类型: %d)",
-                         i, can_id, motor_type);
+            RCLCPP_DEBUG(logger_, "电机%d初始化成功 (CAN接口: %s, CAN ID: %d, 类型: %d)",
+                         i, can_interface.c_str(), can_id, motor_type);
         }
         catch (const std::exception& e)
         {

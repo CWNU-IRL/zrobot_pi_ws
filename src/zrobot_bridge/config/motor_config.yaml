@@ -3,7 +3,6 @@
 #  * @brief 电机控制节点配置文件
 #  * 
 #  * 配置说明：
-#  * - can_interface: CAN网络接口名称（如can0）
 #  * - master_id: 主机ID（通常为0）
 #  * - motor_can_ids: 23个电机的CAN ID数组，顺序对应电机索引0-22
 #  * - motor_types: 23个电机的类型数组，类型定义见motor_cfg.h中的ActuatorType
@@ -14,13 +13,11 @@
 #  *   - 4: ROBSTRIDE_04
 #  *   - 5: ROBSTRIDE_05
 #  *   - 6: ROBSTRIDE_06
+#  * - motor_can_interfaces: 23个电机所使用的CAN接口名称（can0/can1/can2/can3）
 #  */
 
 motor_controller_node:
   ros__parameters:
-    # CAN接口名称
-    can_interface: "can0"
-    
     # 主机ID
     master_id: 0
     
@@ -77,3 +74,31 @@ motor_controller_node:
       - 0    # 电机20的类型
       - 0    # 电机21的类型
       - 0    # 电机22的类型
+    
+    # 23个电机使用的CAN接口配置
+    # 根据你的硬件连接修改此列表（can0/can1/can2/can3）
+    # 示例：前6个电机用can0，接下来6个用can1，再6个用can2，最后5个用can3
+    motor_can_interfaces:
+      - "can0"    # 电机0使用的CAN接口
+      - "can0"    # 电机1使用的CAN接口
+      - "can0"    # 电机2使用的CAN接口
+      - "can0"    # 电机3使用的CAN接口
+      - "can0"    # 电机4使用的CAN接口
+      - "can0"    # 电机5使用的CAN接口
+      - "can1"    # 电机6使用的CAN接口
+      - "can1"    # 电机7使用的CAN接口
+      - "can1"    # 电机8使用的CAN接口
+      - "can1"    # 电机9使用的CAN接口
+      - "can1"    # 电机10使用的CAN接口
+      - "can1"    # 电机11使用的CAN接口
+      - "can2"    # 电机12使用的CAN接口
+      - "can2"    # 电机13使用的CAN接口
+      - "can2"    # 电机14使用的CAN接口
+      - "can2"    # 电机15使用的CAN接口
+      - "can2"    # 电机16使用的CAN接口
+      - "can2"    # 电机17使用的CAN接口
+      - "can3"    # 电机18使用的CAN接口
+      - "can3"    # 电机19使用的CAN接口
+      - "can3"    # 电机20使用的CAN接口
+      - "can3"    # 电机21使用的CAN接口
+      - "can3"    # 电机22使用的CAN接口
