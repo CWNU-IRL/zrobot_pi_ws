@@ -29,8 +29,8 @@ private:
     // 初始化电机
     void initialize_motors();
 
-    // 从参数服务器获取电机配置
-    bool load_motor_configuration();
+    // // 从参数服务器获取电机配置
+    // bool load_motor_configuration();
 
     // 主机ID
     uint8_t master_id_;

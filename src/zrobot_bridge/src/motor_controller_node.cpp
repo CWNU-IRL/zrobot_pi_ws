@@ -2,6 +2,24 @@
 #include <string>
 #include <vector>
 
+/**
+ * @brief MotorControllerNode 构造函数
+ * 
+ * 初始化电机控制节点，包括以下步骤：
+ * 1. 初始化ROS 2节点，节点名称为 "motor_controller_node"
+ * 2. 声明并获取ROS参数：
+ *    - master_id: 主机ID (默认值: 0)
+ *    - motor_can_ids: 电机CAN ID列表 (默认值: vector<0>)
+ *    - motor_types: 电机类型列表 (默认值: vector<0>)
+ *    - motor_can_interfaces: 电机CAN接口列表 (默认值: vector<"can0">)
+ * 3. 验证参数有效性，若参数大小不符合NUM_MOTORS则使用默认值
+ * 4. 调用initialize_motors()初始化所有电机
+ * 5. 创建ROS服务 "rob_stride_control" 用于电机控制
+ * 
+ * @throw 若任何电机初始化失败，将记录错误但不会抛出异常
+ * @see initialize_motors() - 电机初始化方法
+ * @see handle_rob_stride_service() - 服务回调函数
+ */
 MotorControllerNode::MotorControllerNode()
     : rclcpp::Node("motor_controller_node"),
       logger_(this->get_logger())

@@ -40,7 +40,7 @@ void RobStrideMotor::init_socket()
 
 void RobStrideMotor::receive_status_frame()
 {
-    auto result = receive();
+    auto result = receive(5);
     if (!result)
     {
         throw std::runtime_error("No frame received.");
