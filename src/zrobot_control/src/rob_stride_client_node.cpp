@@ -16,7 +16,7 @@ public:
         
         // 创建服务客户端
         client_ = this->create_client<rs_interface::srv::RobStrideMsgs>(
-            "/motor_controller_node/rob_stride_control");
+            "/rob_stride_control");
         
         // 创建定时器，每1秒触发一次
         timer_ = this->create_wall_timer(

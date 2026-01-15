@@ -34,9 +34,11 @@ MotorControllerNode::MotorControllerNode()
 
     // 获取参数
     master_id_ = static_cast<uint8_t>(this->get_parameter("master_id").as_int());
-
+    // 电机的CAN ID
     auto can_ids_param = this->get_parameter("motor_can_ids").as_integer_array();
+    // 电机类型
     auto types_param = this->get_parameter("motor_types").as_integer_array();
+    // 电机CAN接口
     auto interfaces_param = this->get_parameter("motor_can_interfaces").as_string_array();
 
     // 验证参数
@@ -98,8 +100,15 @@ MotorControllerNode::MotorControllerNode()
         "rob_stride_control",
         std::bind(&MotorControllerNode::handle_rob_stride_service, this,
                   std::placeholders::_1, std::placeholders::_2));
-
+                  
     RCLCPP_INFO(logger_, "电机控制服务已创建: /motor_controller_node/rob_stride_control");
+    set_zeros_service_ = this->create_service<rs_interface::srv::SetZeros>(
+        "set_zeros",
+        std::bind(&MotorControllerNode::handle_set_zeros_service, this,
+                  std::placeholders::_1, std::placeholders::_2));
+
+    RCLCPP_INFO(logger_, "零点设置服务已创建: /motor_controller_node/set_zeros");
+
 }
 
 MotorControllerNode::~MotorControllerNode()
@@ -122,12 +131,34 @@ MotorControllerNode::~MotorControllerNode()
     }
 }
 
+/**
+ * @brief 初始化所有电机
+ * 
+ * 该方法遍历所有电机配置（由构造函数加载的参数），为每个电机创建一个RobStrideMotor对象。
+ * 
+ * 执行步骤：
+ * 1. 使用互斥锁锁定motors_数组，确保线程安全
+ * 2. 记录初始化开始的日志信息
+ * 3. 对每个电机执行以下操作：
+ *    - 从配置数组中获取该电机的CAN ID、类型和CAN接口信息
+ *    - 使用std::make_shared创建RobStrideMotor对象并存储在motors_[i]中
+ *    - 若初始化成功，记录调试日志信息，包含CAN接口、CAN ID和电机类型
+ *    - 若初始化失败，记录错误日志，并将motors_[i]设置为nullptr
+ * 4. 记录初始化完成的日志信息
+ * 
+ * @thread_safety 使用std::lock_guard保护motors_数组的访问，确保初始化过程中的线程安全
+ * 
+ * @note 该方法不会因为某个电机初始化失败而中断整个过程，失败的电机将被标记为nullptr
+ * 
+ * @see RobStrideMotor - 电机驱动类
+ * @see motors_ - 存储所有电机指针的数组
+ */
 void MotorControllerNode::initialize_motors()
 {
     std::lock_guard<std::mutex> lock(motors_mutex_);
 
     RCLCPP_INFO(logger_, "开始初始化%d个电机...", NUM_MOTORS);
-
+    // 遍历所有电机配置，创建RobStrideMotor对象
     for (int i = 0; i < NUM_MOTORS; ++i)
     {
         try
@@ -152,6 +183,20 @@ void MotorControllerNode::initialize_motors()
     RCLCPP_INFO(logger_, "电机初始化完成");
 }
 
+/**
+ * @brief RobStrideMsgs 服务回调
+ *
+ * 处理步态控制服务请求：
+ * 1. 加锁保护motors_，确保控制和反馈采集线程安全
+ * 2. 校验请求位置数组尺寸是否等于NUM_MOTORS
+ * 3. 逐电机发送位置/速度/KP/KD指令，收集位置、速度、扭矩、温度反馈
+ * 4. 若单个电机初始化缺失或控制失败，仅影响该电机反馈并记录日志，其余电机继续
+ *
+ * @param request 服务请求，包含目标位置数组
+ * @param response 服务响应，包含反馈数据以及成功与否信息
+ *
+ * @note 响应数组为固定长度[NUM_MOTORS]，无需resize；异常会被捕获并写入日志
+ */
 void MotorControllerNode::handle_rob_stride_service(
     const std::shared_ptr<rs_interface::srv::RobStrideMsgs::Request> request,
     std::shared_ptr<rs_interface::srv::RobStrideMsgs::Response> response)
@@ -170,8 +215,6 @@ void MotorControllerNode::handle_rob_stride_service(
     }
 
     // 初始化响应数据
-    // 注意：响应的数组是固定大小的[23]，不需要resize
-
     try
     {
         // 向所有电机发送指令并收集反馈
@@ -227,6 +270,39 @@ void MotorControllerNode::handle_rob_stride_service(
         response->message = std::string("处理请求时出错: ") + e.what();
         RCLCPP_ERROR(logger_, "%s", response->message.c_str());
     }
+}
+
+void MotorControllerNode::handle_set_zeros_service(
+    const std::shared_ptr<rs_interface::srv::SetZeros::Request>,
+    std::shared_ptr<rs_interface::srv::SetZeros::Response> response)
+{
+    std::lock_guard<std::mutex> lock(motors_mutex_);
+
+    bool has_error = false;
+
+    for (int i = 0; i < NUM_MOTORS; ++i)
+    {
+        if (!motors_[i])
+        {
+            RCLCPP_WARN(logger_, "电机%d未初始化，跳过零点设置", i);
+            has_error = true;
+            continue;
+        }
+
+        try
+        {
+            motors_[i]->Set_ZeroPos();
+            RCLCPP_INFO(logger_, "电机%d零点设置指令已发送", i);
+        }
+        catch (const std::exception& e)
+        {
+            RCLCPP_ERROR(logger_, "电机%d设置零点失败: %s", i, e.what());
+            has_error = true;
+        }
+    }
+
+    response->success = !has_error;
+    response->message = has_error ? "部分或全部电机零点设置失败" : "所有电机零点设置指令已发送";
 }
 
 int main(int argc, char* argv[])

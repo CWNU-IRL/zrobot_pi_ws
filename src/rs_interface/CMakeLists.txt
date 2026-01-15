@@ -10,7 +10,8 @@ find_package(ament_cmake REQUIRED)
 find_package(rosidl_default_generators REQUIRED)
 
 rosidl_generate_interfaces(${PROJECT_NAME}
-  "srv/RobStrideMsgs.srv")
+  "srv/RobStrideMsgs.srv"
+  "srv/SetZeros.srv")
   
 if(BUILD_TESTING)
   find_package(ament_lint_auto REQUIRED)
