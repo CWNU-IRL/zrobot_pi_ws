@@ -293,6 +293,28 @@ std::tuple<float, float, float, float> RobStrideMotor::send_velocity_mode_comman
     return std::make_tuple(position_, velocity_, torque_, temperature_);
 }
 
+/**
+ * @brief 读取电机的初始位置
+ * 
+ * 通过监听 CAN 总线上的电机反馈帧，读取电机的当前位置。
+ * 该函数会持续监听直到接收到有效的位置反馈或超时（10秒）。
+ * 
+ * @return float 电机的初始位置（单位：弧度）
+ *               - 成功：返回读取到的位置值（范围：-4π 到 4π）
+ *               - 超时：返回 0.0f
+ * 
+ * @note 函数执行流程：
+ *       1. 持续读取 CAN 总线帧
+ *       2. 解析 CAN ID，提取通信类型、主机ID和设备ID
+ *       3. 检查是否为电机请求反馈帧（type=0x02, mid=0x01, eid=0xFD）
+ *       4. 解析位置数据并转换为物理量（弧度）
+ *       5. 如果10秒内未收到有效数据，超时返回
+ * 
+ * @warning 该函数会阻塞执行，最长可能阻塞10秒
+ * @warning 调用前需确保 CAN 总线已正确初始化
+ * 
+ * @see uint_to_float() 用于将16位无符号整数转换为浮点位置值
+ */
 float RobStrideMotor::read_initial_position()
 {
     struct can_frame frame{};

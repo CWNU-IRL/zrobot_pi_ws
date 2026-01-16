@@ -109,6 +109,13 @@ MotorControllerNode::MotorControllerNode()
 
     RCLCPP_INFO(logger_, "零点设置服务已创建: /motor_controller_node/set_zeros");
 
+    get_positions_service_ = this->create_service<rs_interface::srv::GetPos>(
+            "get_positions",
+            std::bind(&MotorControllerNode::handle_get_positions_service, this,
+                    std::placeholders::_1, std::placeholders::_2));
+
+    RCLCPP_INFO(logger_, "位置读取服务已创建: /motor_controller_node/get_positions");
+
 }
 
 MotorControllerNode::~MotorControllerNode()
@@ -303,6 +310,73 @@ void MotorControllerNode::handle_set_zeros_service(
 
     response->success = !has_error;
     response->message = has_error ? "部分或全部电机零点设置失败" : "所有电机零点设置指令已发送";
+}
+
+/**
+ * @brief 获取所有电机当前位置的服务回调
+ * 
+ * 通过调用每个电机的 read_initial_position() 方法读取当前位置。
+ * 
+ * 执行流程：
+ * 1. 使用互斥锁保护电机访问，确保线程安全
+ * 2. 遍历所有电机，调用 read_initial_position() 读取位置
+ * 3. 将读取到的位置存储到响应数组中
+ * 4. 若电机未初始化或读取失败，该位置设为0.0并记录警告
+ * 5. 返回是否有错误发生的状态
+ * 
+ * @param request  服务请求（空请求，无参数）
+ * @param response 服务响应，包含23个电机的位置、成功标志和消息
+ * 
+ * @thread_safety 使用互斥锁保护电机数组访问
+ * 
+ * @note 该方法会阻塞，因为 read_initial_position() 可能需要等待电机反馈
+ * @note 每个电机的读取最多等待10秒（read_initial_position的超时时间）
+ * 
+ * @see RobStrideMotor::read_initial_position() - 读取电机位置的底层方法
+ */
+void MotorControllerNode::handle_get_positions_service(
+    const std::shared_ptr<rs_interface::srv::GetPos::Request>,
+    std::shared_ptr<rs_interface::srv::GetPos::Response> response)
+{
+    std::lock_guard<std::mutex> lock(motors_mutex_);
+
+    RCLCPP_INFO(logger_, "接收到获取电机位置服务请求");
+
+    bool has_error = false;
+
+    // 遍历所有电机，读取初始位置
+    for (int i = 0; i < NUM_MOTORS; ++i)
+    {
+        if (!motors_[i])
+        {
+            RCLCPP_WARN(logger_, "电机%d未初始化，位置设为0", i);
+            response->feedback_positions[i] = 0.0f;
+            has_error = true;
+            continue;
+        }
+
+        try
+        {
+            // 调用 read_initial_position 读取当前位置
+            float position = motors_[i]->read_initial_position();
+            response->feedback_positions[i] = position;
+            
+            RCLCPP_INFO(logger_, "电机%d当前位置: %.3f rad", i, position);
+        }
+        catch (const std::exception& e)
+        {
+            RCLCPP_ERROR(logger_, "读取电机%d位置失败: %s", i, e.what());
+            response->feedback_positions[i] = 0.0f;
+            has_error = true;
+        }
+    }
+
+    response->success = !has_error;
+    response->message = has_error 
+        ? "部分或全部电机位置读取失败" 
+        : "所有电机位置读取成功";
+    
+    RCLCPP_INFO(logger_, "位置读取服务请求处理完成");
 }
 
 int main(int argc, char* argv[])
