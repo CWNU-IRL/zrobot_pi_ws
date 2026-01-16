@@ -1,7 +1,3 @@
-//
-// Created by Bill on 2026 01 16.
-//
-
 #include "zrobot_deploy/FSM.h"
 
 FSM::FSM(std::shared_ptr<rclcpp::Node> node)
@@ -18,7 +14,7 @@ FSM::FSM(std::shared_ptr<rclcpp::Node> node)
     
     // 创建服务客户端
     control_client_ = node_->create_client<rs_interface::srv::RobStrideMsgs>("/rob_stride_control");
-    get_positions_client_ = node_->create_client<rs_interface::srv::GetPos>("/get_positions");
+    get_positions_client_ = node_->create_client<rs_interface::srv::GetPositions>("/get_positions");
     
     RCLCPP_INFO(node_->get_logger(), "FSM initialized");
 }
@@ -161,7 +157,7 @@ bool FSM::getCurrentPositions(std::array<float, 23>& positions)
     }
     
     // 创建服务请求（GetPos服务的请求为空）
-    auto request = std::make_shared<rs_interface::srv::GetPos::Request>();
+    auto request = std::make_shared<rs_interface::srv::GetPositions::Request>();
     
     // 异步发送服务请求
     auto future = get_positions_client_->async_send_request(request);

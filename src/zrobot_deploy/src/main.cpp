@@ -55,11 +55,8 @@ int kbhit()
 }
 
 void printMenu()
-{
-    std::cout << "\n========================================\n";
-    std::cout << "   机器人运动控制系统 - FSM控制器\n";
+{;
     std::cout << "========================================\n";
-    std::cout << "键盘控制:\n";
     std::cout << "  [F] - 启动 FixStand 状态机 (移动到机械零位)\n";
     std::cout << "  [S] - 停止当前状态机\n";
     std::cout << "  [Q] - 退出程序\n";
@@ -100,7 +97,7 @@ int main(int argc, char** argv)
                     if (current_fsm) {
                         RCLCPP_INFO(node->get_logger(), "Stopping current FSM...");
                         current_fsm->exit();
-                        current_fsm.reset();
+                        current_fsm.reset();  // 重置智能指针
                     }
                     
                     // 创建并初始化 FixStand 状态机

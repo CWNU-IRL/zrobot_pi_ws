@@ -109,7 +109,7 @@ MotorControllerNode::MotorControllerNode()
 
     RCLCPP_INFO(logger_, "零点设置服务已创建: /motor_controller_node/set_zeros");
 
-    get_positions_service_ = this->create_service<rs_interface::srv::GetPos>(
+    get_positions_service_ = this->create_service<rs_interface::srv::GetPositions>(
             "get_positions",
             std::bind(&MotorControllerNode::handle_get_positions_service, this,
                     std::placeholders::_1, std::placeholders::_2));
@@ -335,8 +335,8 @@ void MotorControllerNode::handle_set_zeros_service(
  * @see RobStrideMotor::read_initial_position() - 读取电机位置的底层方法
  */
 void MotorControllerNode::handle_get_positions_service(
-    const std::shared_ptr<rs_interface::srv::GetPos::Request>,
-    std::shared_ptr<rs_interface::srv::GetPos::Response> response)
+    const std::shared_ptr<rs_interface::srv::GetPositions::Request>,
+    std::shared_ptr<rs_interface::srv::GetPositions::Response> response)
 {
     std::lock_guard<std::mutex> lock(motors_mutex_);
 

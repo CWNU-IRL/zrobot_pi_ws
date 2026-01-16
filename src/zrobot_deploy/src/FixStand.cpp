@@ -28,11 +28,11 @@ void FixStand::initialize()
     
     RCLCPP_INFO(node_->get_logger(), "FixStand initializing...");
     
-    // 通过调用get_positions服务获取当前电机位置作为初始位置
+    // 获取当前电机位置作为初始位置
     if (getCurrentPositions(initial_positions_)) {
         RCLCPP_INFO(node_->get_logger(), "Initial positions read successfully from get_positions service");
-        RCLCPP_DEBUG(node_->get_logger(), "Sample positions: [0]=%.3f, [1]=%.3f, [2]=%.3f rad", 
-                    initial_positions_[0], initial_positions_[1], initial_positions_[2]);
+        // RCLCPP_DEBUG(node_->get_logger(), "Sample positions: [0]=%.3f, [1]=%.3f, [2]=%.3f rad", 
+        //             initial_positions_[0], initial_positions_[1], initial_positions_[2]);
     } else {
         RCLCPP_WARN(node_->get_logger(), "Failed to read initial positions from service, assuming zero");
         initial_positions_.fill(0.0f);
@@ -47,7 +47,7 @@ void FixStand::initialize()
     is_initialized_ = true;
     
     RCLCPP_INFO(node_->get_logger(), 
-                "FixStand initialized, will move to zero position in %.1f seconds", 
+                "FixStand initialized, will move to target position in %.1f seconds", 
                 interpolation_time_);
 }
 

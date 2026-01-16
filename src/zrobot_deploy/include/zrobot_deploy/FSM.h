@@ -3,7 +3,7 @@
 
 #include <rclcpp/rclcpp.hpp>
 #include <rs_interface/srv/rob_stride_msgs.hpp>
-#include <rs_interface/srv/get_pos.hpp>
+#include <rs_interface/srv/get_positions.hpp>
 #include <memory>
 #include <vector>
 #include <array>
@@ -51,7 +51,7 @@ protected:
     
     // 服务客户端
     rclcpp::Client<rs_interface::srv::RobStrideMsgs>::SharedPtr control_client_;
-    rclcpp::Client<rs_interface::srv::GetPos>::SharedPtr get_positions_client_;
+    rclcpp::Client<rs_interface::srv::GetPositions>::SharedPtr get_positions_client_;
     
     // 当前状态
     FSMState current_state_;

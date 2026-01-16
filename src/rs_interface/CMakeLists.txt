@@ -11,7 +11,9 @@ find_package(rosidl_default_generators REQUIRED)
 
 rosidl_generate_interfaces(${PROJECT_NAME}
   "srv/RobStrideMsgs.srv"
-  "srv/SetZeros.srv")
+  "srv/SetZeros.srv"
+  "srv/GetPositions.srv"
+  )
   
 if(BUILD_TESTING)
   find_package(ament_lint_auto REQUIRED)
