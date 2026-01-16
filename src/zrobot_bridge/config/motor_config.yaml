@@ -22,7 +22,6 @@ motor_controller_node:
     master_id: 0
     
     # 23个电机的CAN ID配置
-    # 修改此列表来对应你的电机CAN ID
     motor_can_ids:
       - 1    # 电机0的CAN ID
       - 2    # 电机1的CAN ID
@@ -49,7 +48,6 @@ motor_controller_node:
       - 23   # 电机22的CAN ID
     
     # 23个电机的类型配置
-    # 修改此列表来指定每个电机的型号
     motor_types:
       - 0    # 电机0的类型
       - 0    # 电机1的类型
@@ -76,8 +74,6 @@ motor_controller_node:
       - 0    # 电机22的类型
     
     # 23个电机使用的CAN接口配置
-    # 根据你的硬件连接修改此列表（can0/can1/can2/can3）
-    # 示例：前6个电机用can0，接下来6个用can1，再6个用can2，最后5个用can3
     motor_can_interfaces:
       - "can0"    # 电机0使用的CAN接口
       - "can0"    # 电机1使用的CAN接口

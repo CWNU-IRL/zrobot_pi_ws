@@ -237,16 +237,22 @@ void MotorControllerNode::handle_rob_stride_service(
 
             try
             {
-                // 发送运控模式指令（位置 + 速度 + KP + KD）
-                // 参数：torque, position, velocity, kp, kd
-                auto [pos, vel, torq, temp] = motors_[i]->send_motion_command(
-                    0.0f,                  // torque
-                    target_position,       // position (rad)
-                    5.0f,                  // velocity (rad/s)
-                    0.5f,                  // kp
-                    0.1f                   // kd
+                // CSP模式指令
+                auto [pos, vel, torq, temp] = motors_[i]->RobStrite_Motor_PosCSP_control(
+                    2.0f,                  // velocity (rad/s)
+                    target_position        // position (rad)
                 );
-
+                
+                // // 发送运控模式指令（位置 + 速度 + KP + KD）
+                // // 参数：torque, position, velocity, kp, kd
+                // auto [pos, vel, torq, temp] = motors_[i]->send_motion_command(
+                //     0.0f,                  // torque
+                //     target_position,       // position (rad)
+                //     2.0f,                  // velocity (rad/s)
+                //     0.5f,                  // kp
+                //     0.1f                   // kd
+                // );
+                
                 // 存储反馈数据
                 response->feedback_positions[i] = pos;
                 response->feedback_velocities[i] = vel;
@@ -279,6 +285,28 @@ void MotorControllerNode::handle_rob_stride_service(
     }
 }
 
+/**
+ * @brief 设置所有电机零点位置的服务回调
+ * 
+ * 通过调用每个电机的 Set_ZeroPos() 方法发送零点设置指令。
+ * 
+ * 执行流程：
+ * 1. 使用互斥锁保护电机访问，确保线程安全
+ * 2. 遍历所有电机，调用 Set_ZeroPos() 发送零点设置指令
+ * 3. 若电机未初始化，跳过并记录警告
+ * 4. 若设置失败，记录错误并标记错误状态
+ * 5. 根据是否有错误设置响应成功标志和消息
+ * 
+ * @param request  服务请求（空请求，无参数）
+ * @param response 服务响应，包含成功标志和状态消息
+ * 
+ * @thread_safety 使用互斥锁保护电机数组访问
+ * 
+ * @note 该方法发送零点设置指令，但不等待电机响应
+ * @note 实际零点设置完成需要电机内部处理时间
+ * 
+ * @see RobStrideMotor::Set_ZeroPos() - 电机零点设置的底层方法
+ */
 void MotorControllerNode::handle_set_zeros_service(
     const std::shared_ptr<rs_interface::srv::SetZeros::Request>,
     std::shared_ptr<rs_interface::srv::SetZeros::Response> response)

@@ -21,16 +21,9 @@ public:
     FSM(std::shared_ptr<rclcpp::Node> node);
     virtual ~FSM();
     
-    // 初始化状态机
     virtual void initialize();
-    
-    // 运行一个控制周期
     virtual void run() = 0;
-    
-    // 获取当前状态
     FSMState getState() const { return current_state_; }
-    
-    // 退出状态机
     virtual void exit();
     
 protected:
@@ -43,7 +36,7 @@ protected:
                          std::array<float, 23>& torques,
                          std::array<float, 23>& temperatures);
     
-    // 获取当前电机位置（通过调用get_positions服务）
+    // 获取当前电机位置
     bool getCurrentPositions(std::array<float, 23>& positions);
     
     // ROS2节点

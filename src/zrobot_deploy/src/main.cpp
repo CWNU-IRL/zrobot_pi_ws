@@ -6,7 +6,7 @@
 #include <unistd.h>
 #include <fcntl.h>
 
-// 键盘输入相关函数
+// 获取单个字符输入
 int getch()
 {
     int ch;
@@ -27,17 +27,17 @@ int getch()
     
     return ch;
 }
-
+// 检测键盘是否有输入
 int kbhit()
 {
     struct termios oldt, newt;
     int ch;
     int oldf;
     
-    tcgetattr(STDIN_FILENO, &oldt);
-    newt = oldt;
-    newt.c_lflag &= ~(ICANON | ECHO);
-    tcsetattr(STDIN_FILENO, TCSANOW, &newt);
+    tcgetattr(STDIN_FILENO, &oldt); // 保存当前终端设置
+    newt = oldt; // 复制设置
+    newt.c_lflag &= ~(ICANON | ECHO); // 允许立即读取字符且不显示在终端
+    tcsetattr(STDIN_FILENO, TCSANOW, &newt); // 应用新的终端设置
     oldf = fcntl(STDIN_FILENO, F_GETFL, 0);
     fcntl(STDIN_FILENO, F_SETFL, oldf | O_NONBLOCK);
     
@@ -148,7 +148,7 @@ int main(int argc, char** argv)
             current_fsm->run();
         }
         
-        // ROS2 spin once
+        // 处理 ROS 回调（非阻塞）
         rclcpp::spin_some(node);
         
         // 控制循环频率，根据循环实际耗时自动计算休眠时间

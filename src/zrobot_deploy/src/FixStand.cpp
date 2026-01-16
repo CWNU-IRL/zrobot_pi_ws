@@ -5,7 +5,7 @@
 FixStand::FixStand(std::shared_ptr<rclcpp::Node> node)
     : FSM(node)
     , internal_state_(InternalState::INIT)
-    , interpolation_time_(3.0)  // 3秒缓慢移动到零位
+    , interpolation_time_(3.0)  // 3秒
     , elapsed_time_(0.0)
     , is_initialized_(false)
 {
