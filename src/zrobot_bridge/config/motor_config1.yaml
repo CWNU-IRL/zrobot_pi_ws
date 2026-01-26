@@ -1,0 +1,53 @@
+# /**
+#  * @file motor_config.yaml
+#  * @brief 电机控制节点配置文件
+#  * 
+#  * 配置说明：
+#  * - master_id: 主机ID（通常为0）
+#  * - motor_can_ids: 23个电机的CAN ID数组，顺序对应电机索引0-22
+#  * - motor_types: 23个电机的类型数组，类型定义见motor_cfg.h中的ActuatorType
+#  *   - 0: ROBSTRIDE_00
+#  *   - 1: ROBSTRIDE_01
+#  *   - 2: ROBSTRIDE_02
+#  *   - 3: ROBSTRIDE_03
+#  *   - 4: ROBSTRIDE_04
+#  *   - 5: ROBSTRIDE_05
+#  *   - 6: ROBSTRIDE_06
+#  * - motor_can_interfaces: 23个电机所使用的CAN接口名称（can0/can1/can2/can3）
+#  */
+
+motor_controller_node:
+  ros__parameters:
+    # 主机ID
+    master_id: 0xFD
+    
+    # 23个电机的CAN ID配置
+    motor_can_ids:
+      - 0    # 电机0的CAN ID
+      - 1    # 电机1的CAN ID
+      - 2    # 电机2的CAN ID
+      - 3    # 电机3的CAN ID
+      - 4    # 电机4的CAN ID
+      - 5    # 电机5的CAN ID
+
+    
+    # 23个电机的类型配置
+    motor_types:
+      - 2    # 电机0的类型
+      - 2    # 电机1的类型
+      - 4    # 电机2的类型
+      - 4    # 电机3的类型
+      - 3    # 电机4的类型
+      - 3    # 电机5的类型
+
+    
+    # 23个电机使用的CAN接口配置
+    motor_can_interfaces:
+      - "can10"    # 电机0使用的CAN接口
+      - "can10"    # 电机1使用的CAN接口
+      - "can10"    # 电机2使用的CAN接口
+      - "can10"    # 电机3使用的CAN接口
+      - "can10"    # 电机4使用的CAN接口
+      - "can10"    # 电机5使用的CAN接口
+
+

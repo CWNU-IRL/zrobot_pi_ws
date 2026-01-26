@@ -27,10 +27,10 @@ MotorControllerNode::MotorControllerNode()
     RCLCPP_INFO(logger_, "初始化电机控制节点");
 
     // 声明参数
-    this->declare_parameter("master_id", 0);
+    this->declare_parameter("master_id", 0xFD);
     this->declare_parameter<std::vector<int64_t>>("motor_can_ids", std::vector<int64_t>(NUM_MOTORS, 0));
-    this->declare_parameter<std::vector<int64_t>>("motor_types", std::vector<int64_t>(NUM_MOTORS, 0));
-    this->declare_parameter<std::vector<std::string>>("motor_can_interfaces", std::vector<std::string>(NUM_MOTORS, "can0"));
+    this->declare_parameter<std::vector<int64_t>>("motor_types", std::vector<int64_t>(NUM_MOTORS, 2));
+    this->declare_parameter<std::vector<std::string>>("motor_can_interfaces", std::vector<std::string>(NUM_MOTORS, "can10"));
 
     // 获取参数
     master_id_ = static_cast<uint8_t>(this->get_parameter("master_id").as_int());
@@ -176,6 +176,8 @@ void MotorControllerNode::initialize_motors()
 
             motors_[i] = std::make_shared<RobStrideMotor>(
                 can_interface, master_id_, can_id, motor_type);
+            RCLCPP_DEBUG(logger_, "使能电机%d", i);
+            motors_[i]->enable_motor();
 
             RCLCPP_DEBUG(logger_, "电机%d初始化成功 (CAN接口: %s, CAN ID: %d, 类型: %d)",
                          i, can_interface.c_str(), can_id, motor_type);
@@ -213,13 +215,13 @@ void MotorControllerNode::handle_rob_stride_service(
     RCLCPP_INFO(logger_, "接收到RobStrideMsgs服务请求");
 
     // 验证请求数据
-    if (request->positions.size() != NUM_MOTORS)
-    {
-        response->success = false;
-        response->message = "请求的位置数据数量不匹配，期望23个";
-        RCLCPP_ERROR(logger_, "%s", response->message.c_str());
-        return;
-    }
+    // if (request->positions.size() != NUM_MOTORS)
+    // {
+    //     response->success = false;
+    //     response->message = "请求的位置数据数量不匹配，期望23个";
+    //     RCLCPP_ERROR(logger_, "%s", response->message.c_str());
+    //     return;
+    // }
 
     // 初始化响应数据
     try
@@ -238,26 +240,36 @@ void MotorControllerNode::handle_rob_stride_service(
             try
             {
                 // CSP模式指令
-                auto [pos, vel, torq, temp] = motors_[i]->RobStrite_Motor_PosCSP_control(
-                    2.0f,                  // velocity (rad/s)
-                    target_position        // position (rad)
-                );
+                // auto [pos, vel, torq, temp] = motors_[i]->RobStrite_Motor_PosCSP_control(
+                //     2.0f,                  // velocity (rad/s)
+                //     target_position        // position (rad)
+                // );
                 
-                // // 发送运控模式指令（位置 + 速度 + KP + KD）
-                // // 参数：torque, position, velocity, kp, kd
+                // 发送运控模式指令（位置 + 速度 + KP + KD）
+                // 参数：torque, position, velocity, kp, kd
                 // auto [pos, vel, torq, temp] = motors_[i]->send_motion_command(
                 //     0.0f,                  // torque
                 //     target_position,       // position (rad)
-                //     2.0f,                  // velocity (rad/s)
+                //     0.0f,                  // velocity (rad/s)
                 //     0.5f,                  // kp
                 //     0.1f                   // kd
                 // );
-                
+
+                // 参数：torque, position, velocity, kp, kd
+                auto [pos, vel, torq, temp] = motors_[i]->send_motion_command(
+                    0.0f,                  // torque
+                    target_position,       // position (rad)
+                    0.0f,                  // velocity (rad/s)
+                    1.0f,                  // kp
+                    0.5f                   // kd
+                );
+
                 // 存储反馈数据
                 response->feedback_positions[i] = pos;
                 response->feedback_velocities[i] = vel;
                 response->feedback_torques[i] = torq;
                 response->feedback_temperatures[i] = temp;
+
 
                 RCLCPP_DEBUG(logger_, 
                     "电机%d 目标位置: %.3f rad, 反馈 - 位置: %.3f, 速度: %.3f, 扭矩: %.3f, 温度: %.1f",
@@ -385,11 +397,10 @@ void MotorControllerNode::handle_get_positions_service(
 
         try
         {
-            // 调用 read_initial_position 读取当前位置
-            float position = motors_[i]->read_initial_position();
-            response->feedback_positions[i] = position;
+            auto [pos, vel, torq, temp] = motors_[i]->enable_motor();
+            response->feedback_positions[i] = pos;
             
-            RCLCPP_INFO(logger_, "电机%d当前位置: %.3f rad", i, position);
+            RCLCPP_INFO(logger_, "电机%d当前位置: %.3f rad", i, pos);
         }
         catch (const std::exception& e)
         {

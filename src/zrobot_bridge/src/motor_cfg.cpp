@@ -167,6 +167,17 @@ void RobStrideMotor::Set_RobStrite_Motor_parameter(uint16_t Index, float Value, 
         frame.data[6] = 0x00;
         frame.data[7] = 0x00;
     }
+
+    std::cout << "canid = 0x" << std::hex << std::uppercase << frame.can_id << std::dec << std::endl;
+    for (int i = 0; i < 8; ++i)
+        {
+            std::cout << "send data[" << i << "] = 0x"
+                << std::setw(2) << std::setfill('0')
+                << std::hex << std::uppercase
+                << static_cast<int>(frame.data[i]) << "  ";
+        }
+    std::cout << std::dec << std::endl;
+
     int n = write(socket_fd, &frame, sizeof(frame));
     if (n != sizeof(frame))
     {
@@ -187,7 +198,15 @@ std::tuple<float, float, float, float> RobStrideMotor::enable_motor()
     frame.can_id |= CAN_EFF_FLAG; // 扩展帧
     frame.can_dlc = 8;
     memset(frame.data, 0, 8);
-
+    std::cout << "canid = 0x" << std::hex << std::uppercase << frame.can_id << std::dec << std::endl;
+    for (int i = 0; i < 8; ++i)
+        {
+            std::cout << "send data[" << i << "] = 0x"
+                << std::setw(2) << std::setfill('0')
+                << std::hex << std::uppercase
+                << static_cast<int>(frame.data[i]) << "  ";
+        }
+    std::cout << std::dec << std::endl;
     int n = write(socket_fd, &frame, sizeof(frame));
     if (n != sizeof(frame))
     {
@@ -259,7 +278,15 @@ std::tuple<float, float, float, float> RobStrideMotor::send_motion_command(float
     frame.data[6] = (kd_u >> 8);
     frame.data[7] = kd_u;
     // 05 70 00 00 07 01 82 F9
-
+    std::cout << "canid = 0x" << std::hex << std::uppercase << frame.can_id << std::dec << std::endl;
+    for (int i = 0; i < 8; ++i)
+        {
+            std::cout << "send data[" << i << "] = 0x"
+                << std::setw(2) << std::setfill('0')
+                << std::hex << std::uppercase
+                << static_cast<int>(frame.data[i]) << "  ";
+        }
+    std::cout << std::dec << std::endl;
     int n = write(socket_fd, &frame, sizeof(frame));
 
     if (n != sizeof(frame))

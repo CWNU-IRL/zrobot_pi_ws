@@ -20,9 +20,9 @@ public:
         
         // 创建定时器，每1秒触发一次
         timer_ = this->create_wall_timer(
-            1s, std::bind(&RobStrideClientNode::timer_callback, this));
+            5s, std::bind(&RobStrideClientNode::timer_callback, this));
         
-        RCLCPP_INFO(this->get_logger(), "RobStride客户端节点已启动，每1秒发送一次服务请求");
+        RCLCPP_INFO(this->get_logger(), "RobStride客户端节点已启动，每5秒发送一次服务请求");
     }
 
 private:
