@@ -4,7 +4,7 @@
 
 /**
  * @brief MotorControllerNode 构造函数
- * 
+ *
  * 初始化电机控制节点，包括以下步骤：
  * 1. 初始化ROS 2节点，节点名称为 "motor_controller_node"
  * 2. 声明并获取ROS参数：
@@ -15,7 +15,7 @@
  * 3. 验证参数有效性，若参数大小不符合NUM_MOTORS则使用默认值
  * 4. 调用initialize_motors()初始化所有电机
  * 5. 创建ROS服务 "rob_stride_control" 用于电机控制
- * 
+ *
  * @throw 若任何电机初始化失败，将记录错误但不会抛出异常
  * @see initialize_motors() - 电机初始化方法
  * @see handle_rob_stride_service() - 服务回调函数
@@ -31,6 +31,8 @@ MotorControllerNode::MotorControllerNode()
     this->declare_parameter<std::vector<int64_t>>("motor_can_ids", std::vector<int64_t>(NUM_MOTORS, 0));
     this->declare_parameter<std::vector<int64_t>>("motor_types", std::vector<int64_t>(NUM_MOTORS, 2));
     this->declare_parameter<std::vector<std::string>>("motor_can_interfaces", std::vector<std::string>(NUM_MOTORS, "can10"));
+    this->declare_parameter<std::vector<float>>("motor_kps", std::vector<float>(NUM_MOTORS, 1.0f));
+    this->declare_parameter<std::vector<float>>("motor_kds", std::vector<float>(NUM_MOTORS, 0.5f));
 
     // 获取参数
     master_id_ = static_cast<uint8_t>(this->get_parameter("master_id").as_int());
@@ -40,6 +42,9 @@ MotorControllerNode::MotorControllerNode()
     auto types_param = this->get_parameter("motor_types").as_integer_array();
     // 电机CAN接口
     auto interfaces_param = this->get_parameter("motor_can_interfaces").as_string_array();
+    // kp kd
+    auto kps_param = this->get_parameter("motor_kps").as_double_array();
+    auto kds_param = this->get_parameter("motor_kds").as_double_array();
 
     // 验证参数
     if (can_ids_param.size() != NUM_MOTORS)
@@ -90,6 +95,38 @@ MotorControllerNode::MotorControllerNode()
         }
     }
 
+    if (kps_param.size() != NUM_MOTORS)
+    {
+        RCLCPP_WARN(logger_, "电机kp参数列表大小不正确，默认为1.0f");
+        for (int i = 0; i < NUM_MOTORS; ++i)
+        {
+            motor_kps_[i] = 1.0f;
+        }
+    }
+    else
+    {
+        for (int i = 0; i < NUM_MOTORS; ++i)
+        {
+            motor_kps_[i] = kps_param[i];
+        }
+    }
+
+    if (kds_param.size() != NUM_MOTORS)
+    {
+        RCLCPP_WARN(logger_, "电机kp参数列表大小不正确，默认为1.0f");
+        for (int i = 0; i < NUM_MOTORS; ++i)
+        {
+            motor_kds_[i] = 1.0f;
+        }
+    }
+    else
+    {
+        for (int i = 0; i < NUM_MOTORS; ++i)
+        {
+            motor_kds_[i] = kds_param[i];
+        }
+    }
+
     RCLCPP_INFO(logger_, "主机ID: %d", master_id_);
 
     // 初始化电机
@@ -100,7 +137,7 @@ MotorControllerNode::MotorControllerNode()
         "rob_stride_control",
         std::bind(&MotorControllerNode::handle_rob_stride_service, this,
                   std::placeholders::_1, std::placeholders::_2));
-                  
+
     RCLCPP_INFO(logger_, "电机控制服务已创建: /motor_controller_node/rob_stride_control");
     set_zeros_service_ = this->create_service<rs_interface::srv::SetZeros>(
         "set_zeros",
@@ -110,12 +147,11 @@ MotorControllerNode::MotorControllerNode()
     RCLCPP_INFO(logger_, "零点设置服务已创建: /motor_controller_node/set_zeros");
 
     get_positions_service_ = this->create_service<rs_interface::srv::GetPositions>(
-            "get_positions",
-            std::bind(&MotorControllerNode::handle_get_positions_service, this,
-                    std::placeholders::_1, std::placeholders::_2));
+        "get_positions",
+        std::bind(&MotorControllerNode::handle_get_positions_service, this,
+                  std::placeholders::_1, std::placeholders::_2));
 
     RCLCPP_INFO(logger_, "位置读取服务已创建: /motor_controller_node/get_positions");
-
 }
 
 MotorControllerNode::~MotorControllerNode()
@@ -130,7 +166,7 @@ MotorControllerNode::~MotorControllerNode()
             {
                 motors_[i]->Disenable_Motor(0);
             }
-            catch (const std::exception& e)
+            catch (const std::exception &e)
             {
                 RCLCPP_WARN(logger_, "关闭电机%d时出错: %s", i, e.what());
             }
@@ -140,9 +176,9 @@ MotorControllerNode::~MotorControllerNode()
 
 /**
  * @brief 初始化所有电机
- * 
+ *
  * 该方法遍历所有电机配置（由构造函数加载的参数），为每个电机创建一个RobStrideMotor对象。
- * 
+ *
  * 执行步骤：
  * 1. 使用互斥锁锁定motors_数组，确保线程安全
  * 2. 记录初始化开始的日志信息
@@ -152,11 +188,11 @@ MotorControllerNode::~MotorControllerNode()
  *    - 若初始化成功，记录调试日志信息，包含CAN接口、CAN ID和电机类型
  *    - 若初始化失败，记录错误日志，并将motors_[i]设置为nullptr
  * 4. 记录初始化完成的日志信息
- * 
+ *
  * @thread_safety 使用std::lock_guard保护motors_数组的访问，确保初始化过程中的线程安全
- * 
+ *
  * @note 该方法不会因为某个电机初始化失败而中断整个过程，失败的电机将被标记为nullptr
- * 
+ *
  * @see RobStrideMotor - 电机驱动类
  * @see motors_ - 存储所有电机指针的数组
  */
@@ -182,7 +218,7 @@ void MotorControllerNode::initialize_motors()
             RCLCPP_DEBUG(logger_, "电机%d初始化成功 (CAN接口: %s, CAN ID: %d, 类型: %d)",
                          i, can_interface.c_str(), can_id, motor_type);
         }
-        catch (const std::exception& e)
+        catch (const std::exception &e)
         {
             RCLCPP_ERROR(logger_, "初始化电机%d失败: %s", i, e.what());
             motors_[i] = nullptr;
@@ -244,7 +280,7 @@ void MotorControllerNode::handle_rob_stride_service(
                 //     2.0f,                  // velocity (rad/s)
                 //     target_position        // position (rad)
                 // );
-                
+
                 // 发送运控模式指令（位置 + 速度 + KP + KD）
                 // 参数：torque, position, velocity, kp, kd
                 // auto [pos, vel, torq, temp] = motors_[i]->send_motion_command(
@@ -257,11 +293,11 @@ void MotorControllerNode::handle_rob_stride_service(
 
                 // 参数：torque, position, velocity, kp, kd
                 auto [pos, vel, torq, temp] = motors_[i]->send_motion_command(
-                    0.0f,                  // torque
-                    target_position,       // position (rad)
-                    0.0f,                  // velocity (rad/s)
-                    1.0f,                  // kp
-                    0.5f                   // kd
+                    0.0f,            // torque
+                    target_position, // position (rad)
+                    0.0f,            // velocity (rad/s)
+                    motor_kps_[i],            // kp
+                    motor_kds_[i]             // kd
                 );
 
                 // 存储反馈数据
@@ -270,12 +306,11 @@ void MotorControllerNode::handle_rob_stride_service(
                 response->feedback_torques[i] = torq;
                 response->feedback_temperatures[i] = temp;
 
-
-                RCLCPP_DEBUG(logger_, 
-                    "电机%d 目标位置: %.3f rad, 反馈 - 位置: %.3f, 速度: %.3f, 扭矩: %.3f, 温度: %.1f",
-                    i, target_position, pos, vel, torq, temp);
+                RCLCPP_DEBUG(logger_,
+                             "电机%d 目标位置: %.3f rad, 反馈 - 位置: %.3f, 速度: %.3f, 扭矩: %.3f, 温度: %.1f",
+                             i, target_position, pos, vel, torq, temp);
             }
-            catch (const std::exception& e)
+            catch (const std::exception &e)
             {
                 RCLCPP_WARN(logger_, "电机%d 控制失败: %s", i, e.what());
                 response->feedback_positions[i] = 0.0f;
@@ -289,7 +324,7 @@ void MotorControllerNode::handle_rob_stride_service(
         response->message = "所有电机已成功控制";
         RCLCPP_INFO(logger_, "RobStrideMsgs服务请求处理完成");
     }
-    catch (const std::exception& e)
+    catch (const std::exception &e)
     {
         response->success = false;
         response->message = std::string("处理请求时出错: ") + e.what();
@@ -299,24 +334,24 @@ void MotorControllerNode::handle_rob_stride_service(
 
 /**
  * @brief 设置所有电机零点位置的服务回调
- * 
+ *
  * 通过调用每个电机的 Set_ZeroPos() 方法发送零点设置指令。
- * 
+ *
  * 执行流程：
  * 1. 使用互斥锁保护电机访问，确保线程安全
  * 2. 遍历所有电机，调用 Set_ZeroPos() 发送零点设置指令
  * 3. 若电机未初始化，跳过并记录警告
  * 4. 若设置失败，记录错误并标记错误状态
  * 5. 根据是否有错误设置响应成功标志和消息
- * 
+ *
  * @param request  服务请求（空请求，无参数）
  * @param response 服务响应，包含成功标志和状态消息
- * 
+ *
  * @thread_safety 使用互斥锁保护电机数组访问
- * 
+ *
  * @note 该方法发送零点设置指令，但不等待电机响应
  * @note 实际零点设置完成需要电机内部处理时间
- * 
+ *
  * @see RobStrideMotor::Set_ZeroPos() - 电机零点设置的底层方法
  */
 void MotorControllerNode::handle_set_zeros_service(
@@ -341,7 +376,7 @@ void MotorControllerNode::handle_set_zeros_service(
             motors_[i]->Set_ZeroPos();
             RCLCPP_INFO(logger_, "电机%d零点设置指令已发送", i);
         }
-        catch (const std::exception& e)
+        catch (const std::exception &e)
         {
             RCLCPP_ERROR(logger_, "电机%d设置零点失败: %s", i, e.what());
             has_error = true;
@@ -354,24 +389,24 @@ void MotorControllerNode::handle_set_zeros_service(
 
 /**
  * @brief 获取所有电机当前位置的服务回调
- * 
+ *
  * 通过调用每个电机的 read_initial_position() 方法读取当前位置。
- * 
+ *
  * 执行流程：
  * 1. 使用互斥锁保护电机访问，确保线程安全
  * 2. 遍历所有电机，调用 read_initial_position() 读取位置
  * 3. 将读取到的位置存储到响应数组中
  * 4. 若电机未初始化或读取失败，该位置设为0.0并记录警告
  * 5. 返回是否有错误发生的状态
- * 
+ *
  * @param request  服务请求（空请求，无参数）
  * @param response 服务响应，包含23个电机的位置、成功标志和消息
- * 
+ *
  * @thread_safety 使用互斥锁保护电机数组访问
- * 
+ *
  * @note 该方法会阻塞，因为 read_initial_position() 可能需要等待电机反馈
  * @note 每个电机的读取最多等待10秒（read_initial_position的超时时间）
- * 
+ *
  * @see RobStrideMotor::read_initial_position() - 读取电机位置的底层方法
  */
 void MotorControllerNode::handle_get_positions_service(
@@ -399,10 +434,10 @@ void MotorControllerNode::handle_get_positions_service(
         {
             auto [pos, vel, torq, temp] = motors_[i]->enable_motor();
             response->feedback_positions[i] = pos;
-            
+
             RCLCPP_INFO(logger_, "电机%d当前位置: %.3f rad", i, pos);
         }
-        catch (const std::exception& e)
+        catch (const std::exception &e)
         {
             RCLCPP_ERROR(logger_, "读取电机%d位置失败: %s", i, e.what());
             response->feedback_positions[i] = 0.0f;
@@ -411,14 +446,14 @@ void MotorControllerNode::handle_get_positions_service(
     }
 
     response->success = !has_error;
-    response->message = has_error 
-        ? "部分或全部电机位置读取失败" 
-        : "所有电机位置读取成功";
-    
+    response->message = has_error
+                            ? "部分或全部电机位置读取失败"
+                            : "所有电机位置读取成功";
+
     RCLCPP_INFO(logger_, "位置读取服务请求处理完成");
 }
 
-int main(int argc, char* argv[])
+int main(int argc, char *argv[])
 {
     rclcpp::init(argc, argv);
     auto node = std::make_shared<MotorControllerNode>();

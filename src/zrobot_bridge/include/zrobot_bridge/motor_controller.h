@@ -23,6 +23,7 @@ public:
     ~MotorControllerNode();
 
 private:
+    /* ----------- 方法 ----------- */
     // 服务回调函数
     void handle_rob_stride_service(
         const std::shared_ptr<rs_interface::srv::RobStrideMsgs::Request> request,
@@ -39,13 +40,11 @@ private:
     // 初始化电机
     void initialize_motors();
 
-    // // 从参数服务器获取电机配置
-    // bool load_motor_configuration();
-
+    /* ----------- 变量 ----------- */
     // 主机ID
     uint8_t master_id_;
 
-    // 电机数量（固定为23）
+    // 电机数量（23）
     static constexpr int NUM_MOTORS = 23;
 
     // 电机数组：key为电机索引(0-22)，value为RobStrideMotor对象的指针
@@ -59,6 +58,12 @@ private:
 
     // 电机CAN接口映射：index -> CAN interface name
     std::array<std::string, NUM_MOTORS> motor_can_interfaces_;
+
+    // 电机kp映射：index -> ActuatorType
+    std::array<float, NUM_MOTORS> motor_kps_;
+
+    // 电机kd映射：index -> ActuatorType
+    std::array<float, NUM_MOTORS> motor_kds_;
 
     // 服务提供者
     rclcpp::Service<rs_interface::srv::RobStrideMsgs>::SharedPtr service_;
