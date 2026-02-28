@@ -5,3 +5,4 @@ log
 .idea
 *cmake-build*
 .cache
+third_party
