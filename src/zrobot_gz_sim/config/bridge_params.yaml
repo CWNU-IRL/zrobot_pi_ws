@@ -1,0 +1,27 @@
+gazebo_motor_bridge_node:
+  ros__parameters:
+    joint_names:
+      - joint_01
+      - joint_02
+      - joint_03
+      - joint_04
+      - joint_05
+      - joint_06
+      - joint_07
+      - joint_08
+      - joint_09
+      - joint_10
+      - joint_11
+      - joint_12
+      - joint_13
+      - joint_14
+      - joint_15
+      - joint_16
+      - joint_17
+      - joint_18
+      - joint_19
+      - joint_20
+      - joint_21
+      - joint_22
+      - joint_23
+    feedback_temperature: 35.0
