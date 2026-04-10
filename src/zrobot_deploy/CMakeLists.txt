@@ -10,6 +10,8 @@ find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(rs_interface REQUIRED)
 find_package(std_msgs REQUIRED)
+find_package(sensor_msgs REQUIRED)
+find_package(geometry_msgs REQUIRED)
 find_package(Eigen3 REQUIRED)
 find_package(tf2 REQUIRED)
 
@@ -32,6 +34,8 @@ ament_target_dependencies(main
         rclcpp
         rs_interface
         std_msgs
+        sensor_msgs
+        geometry_msgs
         tf2
 )
 

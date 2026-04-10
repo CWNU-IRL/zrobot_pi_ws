@@ -128,12 +128,10 @@ void Locomotion::loadPolicy(const std::string &model_path)
     ort_session_ = std::make_unique<Ort::Session>(*ort_env_, model_path.c_str(), session_options_);
     // 使用默认的内存分配器
     Ort::AllocatorWithDefaultOptions allocator;
-    char *input_name = ort_session_->GetInputName(0, allocator);
-    char *output_name = ort_session_->GetOutputName(0, allocator);
-    input_names_storage_.emplace_back(input_name);
-    output_names_storage_.emplace_back(output_name);
-    allocator.Free(input_name);
-    allocator.Free(output_name);
+    auto input_name = ort_session_->GetInputNameAllocated(0, allocator);
+    auto output_name = ort_session_->GetOutputNameAllocated(0, allocator);
+    input_names_storage_.emplace_back(input_name.get());
+    output_names_storage_.emplace_back(output_name.get());
 
     input_names_.clear();
     output_names_.clear();
