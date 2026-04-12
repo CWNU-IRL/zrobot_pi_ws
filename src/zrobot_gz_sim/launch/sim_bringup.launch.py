@@ -1,17 +1,26 @@
+import os
+
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, RegisterEventHandler
+from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, RegisterEventHandler, SetEnvironmentVariable
+from launch.conditions import IfCondition
 from launch.event_handlers import OnProcessExit
 from launch.launch_description_sources import PythonLaunchDescriptionSource
-from launch.substitutions import Command, LaunchConfiguration, PathJoinSubstitution
+from launch.substitutions import Command, EnvironmentVariable, LaunchConfiguration, PathJoinSubstitution
 from launch_ros.actions import Node
+from launch_ros.parameter_descriptions import ParameterValue
 from launch_ros.substitutions import FindPackageShare
+from ament_index_python.packages import get_package_share_directory
 
 
 def generate_launch_description():
+    pkg_share_dir = get_package_share_directory('zrobot_gz_sim')
+    share_root_dir = os.path.dirname(pkg_share_dir)
+
     pkg_share = FindPackageShare('zrobot_gz_sim')
 
     use_sim_time = LaunchConfiguration('use_sim_time')
     world = LaunchConfiguration('world')
+    enable_controller_spawners = LaunchConfiguration('enable_controller_spawners')
 
     world_arg = DeclareLaunchArgument(
         'world',
@@ -23,19 +32,32 @@ def generate_launch_description():
         default_value='true',
         description='Use simulation time')
 
+    enable_controller_spawners_arg = DeclareLaunchArgument(
+        'enable_controller_spawners',
+        default_value='false',
+        description='Enable controller_manager spawners (requires controller_manager package)')
+
     bridge_params_file = PathJoinSubstitution([pkg_share, 'config', 'bridge_params.yaml'])
     urdf_file = PathJoinSubstitution([pkg_share, 'resources', 'zrobot', 'urdf', 'zrobot.urdf'])
 
-    robot_description = Command([
-        'cat ',
-        urdf_file,
-    ])
+    robot_description = ParameterValue(
+        Command([
+            'cat ',
+            urdf_file,
+        ]),
+        value_type=str,
+    )
 
     gz_sim = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
             PathJoinSubstitution([FindPackageShare('ros_gz_sim'), 'launch', 'gz_sim.launch.py'])
         ),
         launch_arguments={'gz_args': [world, ' -r']}.items(),
+    )
+
+    gz_resource_path = SetEnvironmentVariable(
+        name='GZ_SIM_RESOURCE_PATH',
+        value=[share_root_dir, ':', EnvironmentVariable('GZ_SIM_RESOURCE_PATH', default_value='')],
     )
 
     robot_state_publisher = Node(
@@ -60,6 +82,7 @@ def generate_launch_description():
         executable='spawner',
         output='screen',
         arguments=['joint_state_broadcaster', '--controller-manager', '/controller_manager'],
+        condition=IfCondition(enable_controller_spawners),
     )
 
     joint_group_controller_spawner = Node(
@@ -67,9 +90,11 @@ def generate_launch_description():
         executable='spawner',
         output='screen',
         arguments=['joint_group_position_controller', '--controller-manager', '/controller_manager'],
+        condition=IfCondition(enable_controller_spawners),
     )
 
     spawn_jsb_after_spawn = RegisterEventHandler(
+        condition=IfCondition(enable_controller_spawners),
         event_handler=OnProcessExit(
             target_action=spawn_robot,
             on_exit=[joint_state_broadcaster_spawner],
@@ -77,6 +102,7 @@ def generate_launch_description():
     )
 
     spawn_jgc_after_jsb = RegisterEventHandler(
+        condition=IfCondition(enable_controller_spawners),
         event_handler=OnProcessExit(
             target_action=joint_state_broadcaster_spawner,
             on_exit=[joint_group_controller_spawner],
@@ -103,6 +129,8 @@ def generate_launch_description():
     return LaunchDescription([
         world_arg,
         sim_time_arg,
+        enable_controller_spawners_arg,
+        gz_resource_path,
         gz_sim,
         robot_state_publisher,
         spawn_robot,

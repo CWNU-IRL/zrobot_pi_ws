@@ -26,7 +26,7 @@
         rpy="0 0 0" />
       <geometry>
         <mesh
-          filename="../meshes/base_link.STL" />
+          filename="package://zrobot_gz_sim/resources/zrobot/meshes/base_link.STL" />
       </geometry>
       <material
         name="">
@@ -40,7 +40,7 @@
         rpy="0 0 0" />
       <geometry>
         <mesh
-          filename="../meshes/base_link.STL" />
+          filename="package://zrobot_gz_sim/resources/zrobot/meshes/base_link.STL" />
       </geometry>
     </collision> -->
     <collision>
@@ -53,6 +53,99 @@
       </geometry>
     </collision>
   </link>
+  <link
+    name="imu_link">
+    <inertial>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <mass
+        value="0.02" />
+      <inertia
+        ixx="1e-5"
+        ixy="0"
+        ixz="0"
+        iyy="1e-5"
+        iyz="0"
+        izz="1e-5" />
+    </inertial>
+    <visual>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <sphere
+          radius="0.015" />
+      </geometry>
+      <material
+        name="">
+        <color
+          rgba="0.1 0.8 0.1 1" />
+      </material>
+    </visual>
+  </link>
+  <joint
+    name="imu_joint"
+    type="fixed">
+    <origin
+      xyz="0 0 0"
+      rpy="0 0 0" />
+    <parent
+      link="base_link" />
+    <child
+      link="imu_link" />
+  </joint>
+  <gazebo reference="imu_link">
+    <sensor
+      name="imu_sensor"
+      type="imu">
+      <always_on>true</always_on>
+      <update_rate>200</update_rate>
+      <topic>/imu/data</topic>
+      <imu>
+        <angular_velocity>
+          <x>
+            <noise type="gaussian">
+              <mean>0.0</mean>
+              <stddev>0.001</stddev>
+            </noise>
+          </x>
+          <y>
+            <noise type="gaussian">
+              <mean>0.0</mean>
+              <stddev>0.001</stddev>
+            </noise>
+          </y>
+          <z>
+            <noise type="gaussian">
+              <mean>0.0</mean>
+              <stddev>0.001</stddev>
+            </noise>
+          </z>
+        </angular_velocity>
+        <linear_acceleration>
+          <x>
+            <noise type="gaussian">
+              <mean>0.0</mean>
+              <stddev>0.01</stddev>
+            </noise>
+          </x>
+          <y>
+            <noise type="gaussian">
+              <mean>0.0</mean>
+              <stddev>0.01</stddev>
+            </noise>
+          </y>
+          <z>
+            <noise type="gaussian">
+              <mean>0.0</mean>
+              <stddev>0.01</stddev>
+            </noise>
+          </z>
+        </linear_acceleration>
+      </imu>
+    </sensor>
+  </gazebo>
   <link
     name="L_hip_roll_link">
     <inertial>
@@ -75,7 +168,7 @@
         rpy="0 0 0" />
       <geometry>
         <mesh
-          filename="../meshes/L_hip_roll_link.STL" />
+          filename="package://zrobot_gz_sim/resources/zrobot/meshes/L_hip_roll_link.STL" />
       </geometry>
       <material
         name="">
@@ -89,7 +182,7 @@
         rpy="0 0 0" />
       <geometry>
         <mesh
-          filename="../meshes/L_hip_roll_link.STL" />
+          filename="package://zrobot_gz_sim/resources/zrobot/meshes/L_hip_roll_link.STL" />
       </geometry>
     </collision> -->
   </link>
@@ -133,7 +226,7 @@
         rpy="0 0 0" />
       <geometry>
         <mesh
-          filename="../meshes/L_hip_yaw_link.STL" />
+          filename="package://zrobot_gz_sim/resources/zrobot/meshes/L_hip_yaw_link.STL" />
       </geometry>
       <material
         name="">
@@ -147,7 +240,7 @@
         rpy="0 0 0" />
       <geometry>
         <mesh
-          filename="../meshes/L_hip_yaw_link.STL" />
+          filename="package://zrobot_gz_sim/resources/zrobot/meshes/L_hip_yaw_link.STL" />
       </geometry>
     </collision> -->
   </link>
@@ -191,7 +284,7 @@
         rpy="0 0 0" />
       <geometry>
         <mesh
-          filename="../meshes/L_hip_pitch_link.STL" />
+          filename="package://zrobot_gz_sim/resources/zrobot/meshes/L_hip_pitch_link.STL" />
       </geometry>
       <material
         name="">
@@ -205,7 +298,7 @@
         rpy="0 0 0" />
       <geometry>
         <mesh
-          filename="../meshes/L_hip_pitch_link.STL" />
+          filename="package://zrobot_gz_sim/resources/zrobot/meshes/L_hip_pitch_link.STL" />
       </geometry>
     </collision> -->
   </link>
@@ -249,7 +342,7 @@
         rpy="0 0 0" />
       <geometry>
         <mesh
-          filename="../meshes/L_knee_link.STL" />
+          filename="package://zrobot_gz_sim/resources/zrobot/meshes/L_knee_link.STL" />
       </geometry>
       <material
         name="">
@@ -263,7 +356,7 @@
         rpy="0 0 0" />
       <geometry>
         <mesh
-          filename="../meshes/L_knee_link.STL" />
+          filename="package://zrobot_gz_sim/resources/zrobot/meshes/L_knee_link.STL" />
       </geometry>
     </collision> -->
   </link>
@@ -307,7 +400,7 @@
         rpy="0 0 0" />
       <geometry>
         <mesh
-          filename="../meshes/L_foot_pitch_link.STL" />
+          filename="package://zrobot_gz_sim/resources/zrobot/meshes/L_foot_pitch_link.STL" />
       </geometry>
       <material
         name="">
@@ -321,7 +414,7 @@
         rpy="0 0 0" />
       <geometry>
         <mesh
-          filename="../meshes/L_foot_pitch_link.STL" />
+          filename="package://zrobot_gz_sim/resources/zrobot/meshes/L_foot_pitch_link.STL" />
       </geometry>
     </collision> -->
   </link>
@@ -365,7 +458,7 @@
         rpy="0 0 0" />
       <geometry>
         <mesh
-          filename="../meshes/L_foot_roll_link.STL" />
+          filename="package://zrobot_gz_sim/resources/zrobot/meshes/L_foot_roll_link.STL" />
       </geometry>
       <material
         name="">
@@ -379,7 +472,7 @@
         rpy="0 0 0" />
       <geometry>
         <mesh
-          filename="../meshes/L_foot_roll_link.STL" />
+          filename="package://zrobot_gz_sim/resources/zrobot/meshes/L_foot_roll_link.STL" />
       </geometry>
     </collision>
   </link>
@@ -423,7 +516,7 @@
         rpy="0 0 0" />
       <geometry>
         <mesh
-          filename="../meshes/R_hip_roll_link.STL" />
+          filename="package://zrobot_gz_sim/resources/zrobot/meshes/R_hip_roll_link.STL" />
       </geometry>
       <material
         name="">
@@ -437,7 +530,7 @@
         rpy="0 0 0" />
       <geometry>
         <mesh
-          filename="../meshes/R_hip_roll_link.STL" />
+          filename="package://zrobot_gz_sim/resources/zrobot/meshes/R_hip_roll_link.STL" />
       </geometry>
     </collision> -->
   </link>
@@ -481,7 +574,7 @@
         rpy="0 0 0" />
       <geometry>
         <mesh
-          filename="../meshes/R_hip_yaw_link.STL" />
+          filename="package://zrobot_gz_sim/resources/zrobot/meshes/R_hip_yaw_link.STL" />
       </geometry>
       <material
         name="">
@@ -495,7 +588,7 @@
         rpy="0 0 0" />
       <geometry>
         <mesh
-          filename="../meshes/R_hip_yaw_link.STL" />
+          filename="package://zrobot_gz_sim/resources/zrobot/meshes/R_hip_yaw_link.STL" />
       </geometry>
     </collision> -->
   </link>
@@ -539,7 +632,7 @@
         rpy="0 0 0" />
       <geometry>
         <mesh
-          filename="../meshes/R_hip_pitch_link.STL" />
+          filename="package://zrobot_gz_sim/resources/zrobot/meshes/R_hip_pitch_link.STL" />
       </geometry>
       <material
         name="">
@@ -553,7 +646,7 @@
         rpy="0 0 0" />
       <geometry>
         <mesh
-          filename="../meshes/R_hip_pitch_link.STL" />
+          filename="package://zrobot_gz_sim/resources/zrobot/meshes/R_hip_pitch_link.STL" />
       </geometry>
     </collision> -->
   </link>
@@ -597,7 +690,7 @@
         rpy="0 0 0" />
       <geometry>
         <mesh
-          filename="../meshes/R_knee_link.STL" />
+          filename="package://zrobot_gz_sim/resources/zrobot/meshes/R_knee_link.STL" />
       </geometry>
       <material
         name="">
@@ -611,7 +704,7 @@
         rpy="0 0 0" />
       <geometry>
         <mesh
-          filename="../meshes/R_knee_link.STL" />
+          filename="package://zrobot_gz_sim/resources/zrobot/meshes/R_knee_link.STL" />
       </geometry>
     </collision> -->
   </link>
@@ -655,7 +748,7 @@
         rpy="0 0 0" />
       <geometry>
         <mesh
-          filename="../meshes/R_foot_pitch_link.STL" />
+          filename="package://zrobot_gz_sim/resources/zrobot/meshes/R_foot_pitch_link.STL" />
       </geometry>
       <material
         name="">
@@ -669,7 +762,7 @@
         rpy="0 0 0" />
       <geometry>
         <mesh
-          filename="../meshes/R_foot_pitch_link.STL" />
+          filename="package://zrobot_gz_sim/resources/zrobot/meshes/R_foot_pitch_link.STL" />
       </geometry>
     </collision> -->
   </link>
@@ -713,7 +806,7 @@
         rpy="0 0 0" />
       <geometry>
         <mesh
-          filename="../meshes/R_foot_roll_link.STL" />
+          filename="package://zrobot_gz_sim/resources/zrobot/meshes/R_foot_roll_link.STL" />
       </geometry>
       <material
         name="">
@@ -727,7 +820,7 @@
         rpy="0 0 0" />
       <geometry>
         <mesh
-          filename="../meshes/R_foot_roll_link.STL" />
+          filename="package://zrobot_gz_sim/resources/zrobot/meshes/R_foot_roll_link.STL" />
       </geometry>
     </collision>
   </link>
@@ -771,7 +864,7 @@
         rpy="0 0 0" />
       <geometry>
         <mesh
-          filename="../meshes/chest_head_link.STL" />
+          filename="package://zrobot_gz_sim/resources/zrobot/meshes/chest_head_link.STL" />
       </geometry>
       <material
         name="">
@@ -785,7 +878,7 @@
         rpy="0 0 0" />
       <geometry>
         <mesh
-          filename="../meshes/chest_head_link.STL" />
+          filename="package://zrobot_gz_sim/resources/zrobot/meshes/chest_head_link.STL" />
       </geometry>
     </collision> -->
   </link>
@@ -824,7 +917,7 @@
         rpy="0 0 0" />
       <geometry>
         <mesh
-          filename="../meshes/L_shoulder_pitch_link.STL" />
+          filename="package://zrobot_gz_sim/resources/zrobot/meshes/L_shoulder_pitch_link.STL" />
       </geometry>
       <material
         name="">
@@ -838,7 +931,7 @@
         rpy="0 0 0" />
       <geometry>
         <mesh
-          filename="../meshes/L_shoulder_pitch_link.STL" />
+          filename="package://zrobot_gz_sim/resources/zrobot/meshes/L_shoulder_pitch_link.STL" />
       </geometry>
     </collision> -->
   </link>
@@ -877,7 +970,7 @@
         rpy="0 0 0" />
       <geometry>
         <mesh
-          filename="../meshes/L_shoulder_roll_link.STL" />
+          filename="package://zrobot_gz_sim/resources/zrobot/meshes/L_shoulder_roll_link.STL" />
       </geometry>
       <material
         name="">
@@ -891,7 +984,7 @@
         rpy="0 0 0" />
       <geometry>
         <mesh
-          filename="../meshes/L_shoulder_roll_link.STL" />
+          filename="package://zrobot_gz_sim/resources/zrobot/meshes/L_shoulder_roll_link.STL" />
       </geometry>
     </collision> -->
   </link>
@@ -930,7 +1023,7 @@
         rpy="0 0 0" />
       <geometry>
         <mesh
-          filename="../meshes/L_arm_yaw_link.STL" />
+          filename="package://zrobot_gz_sim/resources/zrobot/meshes/L_arm_yaw_link.STL" />
       </geometry>
       <material
         name="">
@@ -944,7 +1037,7 @@
         rpy="0 0 0" />
       <geometry>
         <mesh
-          filename="../meshes/L_arm_yaw_link.STL" />
+          filename="package://zrobot_gz_sim/resources/zrobot/meshes/L_arm_yaw_link.STL" />
       </geometry>
     </collision> -->
   </link>
@@ -983,7 +1076,7 @@
         rpy="0 0 0" />
       <geometry>
         <mesh
-          filename="../meshes/L_elbow_pitch_link.STL" />
+          filename="package://zrobot_gz_sim/resources/zrobot/meshes/L_elbow_pitch_link.STL" />
       </geometry>
       <material
         name="">
@@ -997,7 +1090,7 @@
         rpy="0 0 0" />
       <geometry>
         <mesh
-          filename="../meshes/L_elbow_pitch_link.STL" />
+          filename="package://zrobot_gz_sim/resources/zrobot/meshes/L_elbow_pitch_link.STL" />
       </geometry>
     </collision> -->
   </link>
@@ -1036,7 +1129,7 @@
         rpy="0 0 0" />
       <geometry>
         <mesh
-          filename="../meshes/R_shoulder_pitch_link.STL" />
+          filename="package://zrobot_gz_sim/resources/zrobot/meshes/R_shoulder_pitch_link.STL" />
       </geometry>
       <material
         name="">
@@ -1050,7 +1143,7 @@
         rpy="0 0 0" />
       <geometry>
         <mesh
-          filename="../meshes/R_shoulder_pitch_link.STL" />
+          filename="package://zrobot_gz_sim/resources/zrobot/meshes/R_shoulder_pitch_link.STL" />
       </geometry>
     </collision> -->
   </link>
@@ -1089,7 +1182,7 @@
         rpy="0 0 0" />
       <geometry>
         <mesh
-          filename="../meshes/R_shoulder_roll_link.STL" />
+          filename="package://zrobot_gz_sim/resources/zrobot/meshes/R_shoulder_roll_link.STL" />
       </geometry>
       <material
         name="">
@@ -1103,7 +1196,7 @@
         rpy="0 0 0" />
       <geometry>
         <mesh
-          filename="../meshes/R_shoulder_roll_link.STL" />
+          filename="package://zrobot_gz_sim/resources/zrobot/meshes/R_shoulder_roll_link.STL" />
       </geometry>
     </collision> -->
   </link>
@@ -1142,7 +1235,7 @@
         rpy="0 0 0" />
       <geometry>
         <mesh
-          filename="../meshes/R_arm_yaw_link.STL" />
+          filename="package://zrobot_gz_sim/resources/zrobot/meshes/R_arm_yaw_link.STL" />
       </geometry>
       <material
         name="">
@@ -1156,7 +1249,7 @@
         rpy="0 0 0" />
       <geometry>
         <mesh
-          filename="../meshes/R_arm_yaw_link.STL" />
+          filename="package://zrobot_gz_sim/resources/zrobot/meshes/R_arm_yaw_link.STL" />
       </geometry>
     </collision> -->
   </link>
@@ -1195,7 +1288,7 @@
         rpy="0 0 0" />
       <geometry>
         <mesh
-          filename="../meshes/R_elbow_pitch_link.STL" />
+          filename="package://zrobot_gz_sim/resources/zrobot/meshes/R_elbow_pitch_link.STL" />
       </geometry>
       <material
         name="">
@@ -1209,7 +1302,7 @@
         rpy="0 0 0" />
       <geometry>
         <mesh
-          filename="../meshes/R_elbow_pitch_link.STL" />
+          filename="package://zrobot_gz_sim/resources/zrobot/meshes/R_elbow_pitch_link.STL" />
       </geometry>
     </collision> -->
   </link>
