@@ -23,15 +23,12 @@ def generate_launch_description():
         default_value='true',
         description='Use simulation time')
 
-    controllers_file = PathJoinSubstitution([pkg_share, 'config', 'controllers.yaml'])
     bridge_params_file = PathJoinSubstitution([pkg_share, 'config', 'bridge_params.yaml'])
-    xacro_file = PathJoinSubstitution([pkg_share, 'urdf', 'zrobot_temp.urdf.xacro'])
+    urdf_file = PathJoinSubstitution([pkg_share, 'resources', 'zrobot', 'urdf', 'zrobot.urdf'])
 
     robot_description = Command([
-        'xacro ',
-        xacro_file,
-        ' controllers_file:=',
-        controllers_file,
+        'cat ',
+        urdf_file,
     ])
 
     gz_sim = IncludeLaunchDescription(
@@ -55,7 +52,7 @@ def generate_launch_description():
         package='ros_gz_sim',
         executable='create',
         output='screen',
-        arguments=['-name', 'zrobot_temp', '-topic', 'robot_description'],
+        arguments=['-name', 'zrobot', '-topic', 'robot_description'],
     )
 
     joint_state_broadcaster_spawner = Node(

@@ -1,6 +1,7 @@
 #include <algorithm>
 #include <array>
 #include <chrono>
+#include <cstdio>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -20,7 +21,8 @@ class GazeboMotorBridgeNode : public rclcpp::Node
 public:
     GazeboMotorBridgeNode()
         : Node("gazebo_motor_bridge_node"),
-          feedback_temperature_(35.0f),
+          active_joint_count_(kNumMotors),
+                    feedback_temperature_(35.0f),
           has_joint_state_(false)
     {
         joint_names_ = this->declare_parameter<std::vector<std::string>>(
@@ -28,14 +30,30 @@ public:
         feedback_temperature_ = static_cast<float>(
             this->declare_parameter<double>("feedback_temperature", 35.0));
 
-        // Validate joint_names size
-        if (joint_names_.size() != kNumMotors)
+        if (joint_names_.empty())
         {
             RCLCPP_WARN(
                 get_logger(),
-                "joint_names size is %zu, expected %zu. Falling back to default names.",
-                joint_names_.size(), kNumMotors);
+                "joint_names is empty. Falling back to default names.");
             joint_names_ = default_joint_names();
+        }
+
+        if (joint_names_.size() > kNumMotors)
+        {
+            RCLCPP_WARN(
+                get_logger(),
+                "joint_names size is %zu, larger than %zu. Extra joints will be ignored.",
+                joint_names_.size(), kNumMotors);
+            joint_names_.resize(kNumMotors);
+        }
+
+        active_joint_count_ = joint_names_.size();
+        if (active_joint_count_ < kNumMotors)
+        {
+            RCLCPP_WARN(
+                get_logger(),
+                "joint_names size is %zu, less than %zu. Remaining service channels will be zero-filled.",
+                active_joint_count_, kNumMotors);
         }
 
         // Build the joint name to index mapping
@@ -80,7 +98,7 @@ public:
                 std::placeholders::_1,
                 std::placeholders::_2));
 
-        RCLCPP_INFO(get_logger(), "Gazebo motor bridge is ready.");
+        RCLCPP_INFO(get_logger(), "Gazebo motor bridge is ready. Active joints: %zu", active_joint_count_);
     }
 
 private:
@@ -134,7 +152,7 @@ private:
         std::shared_ptr<rs_interface::srv::RobStrideMsgs::Response> response)
     {
         std_msgs::msg::Float64MultiArray cmd;
-        cmd.data.resize(kNumMotors);
+        cmd.data.resize(active_joint_count_);
 
         std::array<float, kNumMotors> positions;
         std::array<float, kNumMotors> velocities;
@@ -142,7 +160,7 @@ private:
 
         {
             std::lock_guard<std::mutex> lock(state_mutex_);
-            for (size_t i = 0; i < kNumMotors; ++i)
+            for (size_t i = 0; i < active_joint_count_; ++i)
             {
                 cmd.data[i] = static_cast<double>(request->positions[i] + zero_offsets_[i]);
             }
@@ -200,7 +218,10 @@ private:
             return;
         }
 
-        zero_offsets_ = last_positions_;
+        for (size_t i = 0; i < active_joint_count_; ++i)
+        {
+            zero_offsets_[i] = last_positions_[i];
+        }
         response->success = true;
         response->message = "Zero offsets captured from current joint positions";
     }
@@ -214,6 +235,7 @@ private:
 
     std::vector<std::string> joint_names_;
     std::unordered_map<std::string, size_t> joint_name_to_index_;
+    size_t active_joint_count_;
 
     std::mutex state_mutex_;
     std::array<float, kNumMotors> zero_offsets_;

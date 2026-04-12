@@ -11,29 +11,27 @@ controller_manager:
 joint_group_position_controller:
   ros__parameters:
     joints:
-      - joint_01
-      - joint_02
-      - joint_03
-      - joint_04
-      - joint_05
-      - joint_06
-      - joint_07
-      - joint_08
-      - joint_09
-      - joint_10
-      - joint_11
-      - joint_12
-      - joint_13
-      - joint_14
-      - joint_15
-      - joint_16
-      - joint_17
-      - joint_18
-      - joint_19
-      - joint_20
-      - joint_21
-      - joint_22
-      - joint_23
+      - L_hip_roll_joint
+      - L_hip_yaw_joint
+      - L_hip_pitch_joint
+      - L_knee_joint
+      - L_foot_pitch_joint
+      - L_foot_roll_joint
+      - R_hip_roll_joint
+      - R_hip_yaw_joint
+      - R_hip_pitch_joint
+      - R_knee_joint
+      - R_foot_pitch_joint
+      - R_foot_roll_joint
+      - chest_head_joint
+      - L_shoulder_pitch_joint
+      - L_shoulder_roll_joint
+      - L_arm_yaw_joint
+      - L_elbow_pitch_joint
+      - R_shoulder_pitch_joint
+      - R_shoulder_roll_joint
+      - R_arm_yaw_joint
+      - R_elbow_pitch_joint
     command_interfaces:
       - position
     state_interfaces:
