@@ -1,11 +1,11 @@
 import os
 
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, RegisterEventHandler, SetEnvironmentVariable
+from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, LogInfo, RegisterEventHandler, SetEnvironmentVariable
 from launch.conditions import IfCondition
 from launch.event_handlers import OnProcessExit
 from launch.launch_description_sources import PythonLaunchDescriptionSource
-from launch.substitutions import Command, EnvironmentVariable, LaunchConfiguration, PathJoinSubstitution
+from launch.substitutions import EnvironmentVariable, LaunchConfiguration, PathJoinSubstitution
 from launch_ros.actions import Node
 from launch_ros.parameter_descriptions import ParameterValue
 from launch_ros.substitutions import FindPackageShare
@@ -15,6 +15,18 @@ from ament_index_python.packages import get_package_share_directory
 def generate_launch_description():
     pkg_share_dir = get_package_share_directory('zrobot_gz_sim')
     share_root_dir = os.path.dirname(pkg_share_dir)
+
+    try:
+        get_package_share_directory('controller_manager')
+        has_controller_manager = True
+    except Exception:
+        has_controller_manager = False
+
+    try:
+        get_package_share_directory('gz_ros2_control')
+        has_gz_ros2_control = True
+    except Exception:
+        has_gz_ros2_control = False
 
     pkg_share = FindPackageShare('zrobot_gz_sim')
 
@@ -34,19 +46,25 @@ def generate_launch_description():
     
     enable_controller_spawners_arg = DeclareLaunchArgument(
         'enable_controller_spawners',
-        default_value='false',
+        default_value='true',
         description='Enable controller_manager spawners (requires controller_manager package)')
 
     bridge_params_file = PathJoinSubstitution([pkg_share, 'config', 'bridge_params.yaml'])
-    urdf_file = PathJoinSubstitution([pkg_share, 'resources', 'zrobot', 'urdf', 'zrobot.urdf'])
+    urdf_file_path = os.path.join(pkg_share_dir, 'resources', 'zrobot', 'urdf', 'zrobot.urdf')
+    controllers_file_path = os.path.join(pkg_share_dir, 'config', 'controllers.yaml')
 
-    robot_description = ParameterValue(
-        Command([
-            'cat ',
-            urdf_file,
-        ]),
-        value_type=str,
+    controller_spawner_condition = IfCondition(enable_controller_spawners if has_controller_manager else 'false')
+
+    with open(urdf_file_path, 'r', encoding='utf-8') as urdf_fp:
+        robot_description_text = urdf_fp.read()
+
+    # gz_ros2_control needs a filesystem params file path, package:// is not accepted.
+    robot_description_text = robot_description_text.replace(
+        'package://zrobot_gz_sim/config/controllers.yaml',
+        controllers_file_path,
     )
+
+    robot_description = ParameterValue(robot_description_text, value_type=str)
 
     gz_sim = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
@@ -82,7 +100,7 @@ def generate_launch_description():
         executable='spawner',
         output='screen',
         arguments=['joint_state_broadcaster', '--controller-manager', '/controller_manager'],
-        condition=IfCondition(enable_controller_spawners),
+        condition=controller_spawner_condition,
     )
 
     joint_group_controller_spawner = Node(
@@ -90,11 +108,11 @@ def generate_launch_description():
         executable='spawner',
         output='screen',
         arguments=['joint_group_position_controller', '--controller-manager', '/controller_manager'],
-        condition=IfCondition(enable_controller_spawners),
+        condition=controller_spawner_condition,
     )
 
     spawn_jsb_after_spawn = RegisterEventHandler(
-        condition=IfCondition(enable_controller_spawners),
+        condition=controller_spawner_condition,
         event_handler=OnProcessExit(
             target_action=spawn_robot,
             on_exit=[joint_state_broadcaster_spawner],
@@ -102,11 +120,21 @@ def generate_launch_description():
     )
 
     spawn_jgc_after_jsb = RegisterEventHandler(
-        condition=IfCondition(enable_controller_spawners),
+        condition=controller_spawner_condition,
         event_handler=OnProcessExit(
             target_action=joint_state_broadcaster_spawner,
             on_exit=[joint_group_controller_spawner],
         )
+    )
+
+    controller_manager_missing_warning = LogInfo(
+        msg='[zrobot_gz_sim] controller_manager package not found. '
+            'Controller spawners are disabled; install ros-jazzy-controller-manager and ros-jazzy-ros2-controllers.'
+    )
+
+    gz_ros2_control_missing_warning = LogInfo(
+        msg='[zrobot_gz_sim] gz_ros2_control package not found. '
+            'Install ros-jazzy-gz-ros2-control to enable ros2_control in Gazebo.'
     )
 
     gz_bridge = Node(
@@ -126,7 +154,7 @@ def generate_launch_description():
         parameters=[bridge_params_file, {'use_sim_time': use_sim_time}],
     )
 
-    return LaunchDescription([
+    actions = [
         world_arg,
         sim_time_arg,
         enable_controller_spawners_arg,
@@ -138,4 +166,11 @@ def generate_launch_description():
         spawn_jgc_after_jsb,
         gz_bridge,
         gazebo_motor_bridge,
-    ])
+    ]
+
+    if not has_controller_manager:
+        actions.append(controller_manager_missing_warning)
+    if not has_gz_ros2_control:
+        actions.append(gz_ros2_control_missing_warning)
+
+    return LaunchDescription(actions)

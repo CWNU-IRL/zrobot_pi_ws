@@ -13,13 +13,4 @@ gazebo_motor_bridge_node:
       - R_knee_joint
       - R_foot_pitch_joint
       - R_foot_roll_joint
-      - chest_head_joint
-      - L_shoulder_pitch_joint
-      - L_shoulder_roll_joint
-      - L_arm_yaw_joint
-      - L_elbow_pitch_joint
-      - R_shoulder_pitch_joint
-      - R_shoulder_roll_joint
-      - R_arm_yaw_joint
-      - R_elbow_pitch_joint
     feedback_temperature: 35.0

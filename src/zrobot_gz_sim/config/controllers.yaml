@@ -23,15 +23,6 @@ joint_group_position_controller:
       - R_knee_joint
       - R_foot_pitch_joint
       - R_foot_roll_joint
-      - chest_head_joint
-      - L_shoulder_pitch_joint
-      - L_shoulder_roll_joint
-      - L_arm_yaw_joint
-      - L_elbow_pitch_joint
-      - R_shoulder_pitch_joint
-      - R_shoulder_roll_joint
-      - R_arm_yaw_joint
-      - R_elbow_pitch_joint
     command_interfaces:
       - position
     state_interfaces:
