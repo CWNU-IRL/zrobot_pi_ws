@@ -49,11 +49,14 @@ private:
     rclcpp::Service<rs_interface::srv::SetZeros>::SharedPtr set_zeros_service_;
 
     std::vector<std::string> joint_names_;
+    // 关节名称 --> 索引
     std::unordered_map<std::string, size_t> joint_name_to_index_;
     size_t active_joint_count_;
 
     std::mutex state_mutex_;
     std::array<float, kNumMotors> zero_offsets_;
+
+    // 接收到的关节状态
     std::array<float, kNumMotors> last_positions_;
     std::array<float, kNumMotors> last_velocities_;
     std::array<float, kNumMotors> last_efforts_;
