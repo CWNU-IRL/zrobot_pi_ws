@@ -12,6 +12,7 @@
 enum class FSMState {
     IDLE,           // 空闲状态
     FIX_STAND,      // 固定站立状态
+    LOCOMOTION,     // 运动状态
 };
 
 // FSM基类

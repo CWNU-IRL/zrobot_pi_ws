@@ -32,6 +32,7 @@ def generate_launch_description():
 
     use_sim_time = LaunchConfiguration('use_sim_time')
     world = LaunchConfiguration('world')
+    spawn_z = LaunchConfiguration('spawn_z')
     enable_controller_spawners = LaunchConfiguration('enable_controller_spawners')
 
     world_arg = DeclareLaunchArgument(
@@ -43,6 +44,11 @@ def generate_launch_description():
         'use_sim_time',
         default_value='true',
         description='Use simulation time')
+
+    spawn_z_arg = DeclareLaunchArgument(
+        'spawn_z',
+        default_value='1.05',
+        description='Initial robot spawn height above ground (meters)')
     
     enable_controller_spawners_arg = DeclareLaunchArgument(
         'enable_controller_spawners',
@@ -92,7 +98,7 @@ def generate_launch_description():
         package='ros_gz_sim',
         executable='create',
         output='screen',
-        arguments=['-name', 'zrobot', '-topic', 'robot_description'],
+        arguments=['-name', 'zrobot', '-topic', 'robot_description', '-z', spawn_z],
     )
 
     joint_state_broadcaster_spawner = Node(
@@ -157,6 +163,7 @@ def generate_launch_description():
     actions = [
         world_arg,
         sim_time_arg,
+        spawn_z_arg,
         enable_controller_spawners_arg,
         gz_resource_path,
         gz_sim,

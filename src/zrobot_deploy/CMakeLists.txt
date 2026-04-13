@@ -16,6 +16,7 @@ find_package(Eigen3 REQUIRED)
 find_package(tf2 REQUIRED)
 
 set(ONNXRUNTIME_DIR ${CMAKE_CURRENT_LIST_DIR}/../../third_party/onnxruntime-linux-x64-1.16.3)
+set(ONNXRUNTIME_LIB_DIR ${ONNXRUNTIME_DIR}/lib)
 
 include_directories(
         include
@@ -40,7 +41,13 @@ ament_target_dependencies(main
 )
 
 target_link_libraries(main
-        ${ONNXRUNTIME_DIR}/lib/libonnxruntime.so
+        ${ONNXRUNTIME_LIB_DIR}/libonnxruntime.so
+)
+
+# Keep runtime dependency local to installed executable directory.
+set_target_properties(main PROPERTIES
+        BUILD_WITH_INSTALL_RPATH TRUE
+        INSTALL_RPATH "$ORIGIN"
 )
 
 target_include_directories(main
@@ -53,6 +60,12 @@ target_include_directories(main
 
 install(TARGETS
         main
+        DESTINATION lib/${PROJECT_NAME}
+)
+
+install(FILES
+        ${ONNXRUNTIME_LIB_DIR}/libonnxruntime.so
+        ${ONNXRUNTIME_LIB_DIR}/libonnxruntime.so.1.16.3
         DESTINATION lib/${PROJECT_NAME}
 )
 
