@@ -12,6 +12,10 @@ find_package(sensor_msgs REQUIRED)
 find_package(std_msgs REQUIRED)
 
 add_executable(gazebo_motor_bridge_node src/gazebo_motor_bridge_node.cpp)
+target_include_directories(gazebo_motor_bridge_node PRIVATE
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  $<INSTALL_INTERFACE:include>
+)
 ament_target_dependencies(gazebo_motor_bridge_node
   rclcpp
   rs_interface
@@ -21,6 +25,10 @@ ament_target_dependencies(gazebo_motor_bridge_node
 
 install(TARGETS gazebo_motor_bridge_node
   DESTINATION lib/${PROJECT_NAME}
+)
+
+install(DIRECTORY include/
+  DESTINATION include
 )
 
 install(DIRECTORY launch/
