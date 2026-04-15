@@ -1,6 +1,7 @@
 #include "zrobot_deploy/FSM.h"
 #include "zrobot_deploy/FixStand.h"
 #include "zrobot_deploy/Locomotion.h"
+#include "zrobot_deploy/Damping.h"
 #include <rclcpp/rclcpp.hpp>
 #include <memory>
 #include <termios.h>
@@ -60,6 +61,7 @@ void printMenu()
     std::cout << "========================================\n";
     std::cout << "  [F] - 启动 FixStand 状态机 (移动到机械零位)\n";
     std::cout << "  [L] - 启动 Locomotion 状态机\n";
+    std::cout << "  [D] - 启动 Damping 状态机 (仿真阻尼模式)\n";
     std::cout << "  [S] - 停止当前状态机\n";
     std::cout << "  [Q] - 退出程序\n";
     std::cout << "========================================\n\n";
@@ -129,16 +131,43 @@ int main(int argc, char** argv)
                     std::cout << "\n>>> Locomotion 状态机已启动 <<<\n\n";
                     break;
                 }
+
+                case 'd':
+                case 'D':
+                {
+                    // 如果有正在运行的状态机，先退出
+                    if (current_fsm) {
+                        RCLCPP_INFO(node->get_logger(), "Stopping current FSM...");
+                        current_fsm->exit();
+                        current_fsm.reset();
+                    }
+
+                    // 创建并初始化 Damping 状态机
+                    RCLCPP_INFO(node->get_logger(), "Starting Damping FSM...");
+                    current_fsm = std::make_shared<Damping>(node);
+                    current_fsm->initialize();
+
+                    std::cout << "\n>>> Damping 状态机已启动 <<<\n\n";
+                    break;
+                }
                 
                 case 's':
                 case 'S':
                 {
                     // 停止当前状态机
                     if (current_fsm) {
+                        const bool was_damping = (current_fsm->getState() == FSMState::DAMPING);
                         RCLCPP_INFO(node->get_logger(), "Stopping current FSM...");
                         current_fsm->exit();
                         current_fsm.reset();
                         std::cout << "\n>>> 状态机已停止 <<<\n\n";
+
+                        if (was_damping) {
+                            RCLCPP_INFO(node->get_logger(), "Damping stopped, auto switching to FixStand...");
+                            current_fsm = std::make_shared<FixStand>(node);
+                            current_fsm->initialize();
+                            std::cout << "\n>>> 已自动切换到 FixStand 状态机 <<<\n\n";
+                        }
                     } else {
                         std::cout << "\n>>> 没有正在运行的状态机 <<<\n\n";
                     }
@@ -159,7 +188,7 @@ int main(int argc, char** argv)
                 }
                 
                 default:
-                    std::cout << "\n未知命令，请使用 F/L/S/Q\n";
+                    std::cout << "\n未知命令，请使用 F/L/D/S/Q\n";
                     break;
             }
         }

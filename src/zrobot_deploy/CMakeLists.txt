@@ -26,9 +26,11 @@ add_executable(main src/main.cpp
         src/FSM.cpp
         src/FixStand.cpp
         src/Locomotion.cpp
+        src/Damping.cpp
         include/zrobot_deploy/FSM.h
         include/zrobot_deploy/FixStand.h
         include/zrobot_deploy/Locomotion.h
+        include/zrobot_deploy/Damping.h
 )
 
 ament_target_dependencies(main
