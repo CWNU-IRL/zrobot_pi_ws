@@ -10,6 +10,13 @@ Locomotion::Locomotion(std::shared_ptr<rclcpp::Node> node)
       ort_session_(nullptr),
       memory_info_(Ort::MemoryInfo::CreateCpu(OrtArenaAllocator, OrtMemTypeDefault)),
       thread_running_(false),
+    imu_received_(false),
+    motor_feedback_ready_(false),
+    require_imu_before_locomotion_(true),
+    enable_action_safety_(true),
+    startup_hold_seconds_(0.5),
+    action_delta_limit_(0.08f),
+    action_abs_limit_(1.5f),
       dt_(0.01),
       phase_period_(0.8),
       counter_(0)
@@ -20,6 +27,8 @@ Locomotion::Locomotion(std::shared_ptr<rclcpp::Node> node)
     obs_scaled_.setZero(NUM_OBSERVATIONS);
     obs_mean_.setZero(NUM_OBSERVATIONS);
     obs_scales_.setZero(NUM_OBSERVATIONS);
+    model_input_obs_dim_ = NUM_OBSERVATIONS;
+    obs_model_input_.setZero(model_input_obs_dim_);
     // 动作数据
     act_prev_.setZero(NUM_ACTIONS);
     act_scaled_.setZero(NUM_ACTIONS);
@@ -31,7 +40,7 @@ Locomotion::Locomotion(std::shared_ptr<rclcpp::Node> node)
     damping_.setZero(NUM_ACTIONS);
     // 传感器数据初始化
     current_angular_velocity_.setZero();
-    current_gravity_vector_.setZero();
+    current_gravity_vector_ << 0.0f, 0.0f, -1.0f;
     current_command_.setZero();
 
     RCLCPP_INFO(node_->get_logger(), "Locomotion FSM created");
@@ -66,11 +75,37 @@ void Locomotion::initialize()
 
     // 加载 ONNX 模型
     const auto model_path = node_->declare_parameter<std::string>(
-        "onnx_model_path", "/root/codes/zrobot_pi_ws/models/policy.onnx");
+        "onnx_model_path", "/home/bill/Codes/policy.onnx");
     loadPolicy(model_path);
+
+    std::array<float, 23> startup_positions;
+    if (getCurrentPositions(startup_positions))
+    {
+        current_motor_positions_ = startup_positions;
+        for (int i = 0; i < NUM_ACTIONS; ++i)
+        {
+            act_temp_(i) = startup_positions[i];
+            act_scaled_(i) = startup_positions[i];
+        }
+
+        if (!sendMotorPositions(current_motor_positions_))
+        {
+            RCLCPP_WARN(node_->get_logger(), "Failed to seed motor feedback cache on Locomotion startup");
+            motor_feedback_ready_ = false;
+        }
+        else
+        {
+            motor_feedback_ready_ = true;
+        }
+    }
+    else
+    {
+        RCLCPP_WARN(node_->get_logger(), "Failed to read current positions on Locomotion startup, using fallback zeros");
+    }
     
     // 启动推理线程
     counter_ = 0;
+    init_time_ = std::chrono::steady_clock::now();
     thread_running_ = true;
     inference_thread_ = std::thread(&Locomotion::inferenceLoop, this);
 
@@ -80,9 +115,35 @@ void Locomotion::initialize()
 
 void Locomotion::run()
 {
+    using Clock = std::chrono::steady_clock;
+
     if (!thread_running_)
     {
         RCLCPP_WARN(node_->get_logger(), "Locomotion inference thread not running");
+        return;
+    }
+
+    if (require_imu_before_locomotion_ && !imu_received_)
+    {
+        RCLCPP_WARN_THROTTLE(
+            node_->get_logger(),
+            *node_->get_clock(),
+            2000,
+            "IMU data not received yet, holding current pose in Locomotion");
+        if (!sendMotorPositions(current_motor_positions_))
+        {
+            RCLCPP_ERROR(node_->get_logger(), "Failed to hold motor positions while waiting IMU");
+        }
+        return;
+    }
+
+    const auto elapsed = std::chrono::duration<double>(Clock::now() - init_time_).count();
+    if (elapsed < startup_hold_seconds_)
+    {
+        if (!sendMotorPositions(current_motor_positions_))
+        {
+            RCLCPP_ERROR(node_->get_logger(), "Failed to hold motor positions during startup warmup");
+        }
         return;
     }
 
@@ -103,6 +164,11 @@ void Locomotion::run()
     {
         RCLCPP_ERROR(node_->get_logger(), "Failed to send motor positions in Locomotion");
     }
+    else
+    {
+        current_motor_positions_ = positions;
+        motor_feedback_ready_ = true;
+    }
 }
 
 void Locomotion::exit()
@@ -120,18 +186,47 @@ void Locomotion::exit()
 
 void Locomotion::loadPolicy(const std::string &model_path)
 {
+    constexpr int kMaxSupportedObsDim = 16384;
+
     // 初始化ONNX Runtime环境
     ort_env_ = std::make_unique<Ort::Env>(ORT_LOGGING_LEVEL_WARNING, "locomotion");
     session_options_.SetIntraOpNumThreads(2);
     session_options_.SetGraphOptimizationLevel(GraphOptimizationLevel::ORT_ENABLE_BASIC);
 
     ort_session_ = std::make_unique<Ort::Session>(*ort_env_, model_path.c_str(), session_options_);
+    model_input_obs_dim_ = node_->declare_parameter<int>("model_obs_dim", NUM_OBSERVATIONS * 15);
+
+    if (model_input_obs_dim_ <= 0 || model_input_obs_dim_ > kMaxSupportedObsDim)
+    {
+        model_input_obs_dim_ = NUM_OBSERVATIONS;
+        RCLCPP_WARN(node_->get_logger(),
+                    "Invalid model_input_obs_dim, fallback to %d",
+                    model_input_obs_dim_);
+    }
+    obs_model_input_.setZero(model_input_obs_dim_);
+
+    if (model_input_obs_dim_ % NUM_OBSERVATIONS == 0)
+    {
+        RCLCPP_INFO(node_->get_logger(),
+                    "ONNX obs dim: %d (%d-frame stacked observations)",
+                    model_input_obs_dim_,
+                    model_input_obs_dim_ / NUM_OBSERVATIONS);
+    }
+    else
+    {
+        RCLCPP_WARN(node_->get_logger(),
+                    "ONNX obs dim: %d (not multiple of %d), using rolling append with truncation/padding",
+                    model_input_obs_dim_, NUM_OBSERVATIONS);
+    }
+
     // 使用默认的内存分配器
+    input_names_storage_.clear();
+    output_names_storage_.clear();
     Ort::AllocatorWithDefaultOptions allocator;
     auto input_name = ort_session_->GetInputNameAllocated(0, allocator);
     auto output_name = ort_session_->GetOutputNameAllocated(0, allocator);
-    input_names_storage_.emplace_back(input_name.get());
-    output_names_storage_.emplace_back(output_name.get());
+    input_names_storage_.emplace_back(input_name ? input_name.get() : "obs");
+    output_names_storage_.emplace_back(output_name ? output_name.get() : "action");
 
     input_names_.clear();
     output_names_.clear();
@@ -152,6 +247,24 @@ void Locomotion::initializeParameters()
     // 读取参数
     dt_ = node_->declare_parameter<double>("control_dt", 0.01);
     phase_period_ = node_->declare_parameter<double>("phase_period", 0.8);
+    require_imu_before_locomotion_ = node_->declare_parameter<bool>("require_imu", true);
+    startup_hold_seconds_ = node_->declare_parameter<double>("startup_hold_seconds", 0.5);
+    enable_action_safety_ = node_->declare_parameter<bool>("enable_action_safety", true);
+    action_delta_limit_ = static_cast<float>(node_->declare_parameter<double>("max_action_step", 0.08));
+    action_abs_limit_ = static_cast<float>(node_->declare_parameter<double>("max_action_abs", 1.5));
+
+    if (startup_hold_seconds_ < 0.0)
+    {
+        startup_hold_seconds_ = 0.0;
+    }
+    if (action_delta_limit_ < 0.0f)
+    {
+        action_delta_limit_ = 0.0f;
+    }
+    if (action_abs_limit_ <= 0.0f)
+    {
+        action_abs_limit_ = 1.5f;
+    }
 
     std::vector<double> default_angles = node_->declare_parameter<std::vector<double>>(
         "default_angles", std::vector<double>(NUM_ACTIONS, 0.0));
@@ -223,6 +336,7 @@ void Locomotion::imuCallback(const sensor_msgs::msg::Imu::SharedPtr msg)
     current_gravity_vector_(0) = static_cast<float>(gravity_body.x());
     current_gravity_vector_(1) = static_cast<float>(gravity_body.y());
     current_gravity_vector_(2) = static_cast<float>(gravity_body.z());
+    imu_received_ = true;
 }
 
 void Locomotion::cmdCallback(const geometry_msgs::msg::Twist::SharedPtr msg)
@@ -246,13 +360,21 @@ void Locomotion::collectObservations()
     }
 
     // 读取电机反馈
-    if (getMotorFeedback(feedback_positions_, feedback_velocities_, feedback_torques_, feedback_temperatures_))
+    if (motor_feedback_ready_ && getMotorFeedback(feedback_positions_, feedback_velocities_, feedback_torques_, feedback_temperatures_))
     {
         current_motor_positions_ = feedback_positions_;
         for (int j = 0; j < NUM_ACTIONS; ++j)
         {
             obs_current_(9 + j) = feedback_positions_[j];
             obs_current_(21 + j) = feedback_velocities_[j];
+        }
+    }
+    else
+    {
+        for (int j = 0; j < NUM_ACTIONS; ++j)
+        {
+            obs_current_(9 + j) = current_motor_positions_[j];
+            obs_current_(21 + j) = 0.0f;
         }
     }
 
@@ -269,18 +391,33 @@ void Locomotion::collectObservations()
 
     // 标准化，obs_mean_和obs_scales_都是来自配置文件
     obs_scaled_ = (obs_current_ - obs_mean_).cwiseProduct(obs_scales_); // 逐元素乘法
+
+    if (model_input_obs_dim_ == NUM_OBSERVATIONS)
+    {
+        obs_model_input_ = obs_scaled_;
+    }
+    else
+    {
+        const int append_dim = std::min(NUM_OBSERVATIONS, model_input_obs_dim_);
+        const int shift_dim = model_input_obs_dim_ - append_dim;
+        if (shift_dim > 0)
+        {
+            obs_model_input_.head(shift_dim) = obs_model_input_.segment(append_dim, shift_dim);
+        }
+        obs_model_input_.tail(append_dim) = obs_scaled_.head(append_dim);
+    }
 }
 
 void Locomotion::runInference()
 {
-    std::vector<float> input_data(NUM_OBSERVATIONS, 0.0f);
-    for (int i = 0; i < NUM_OBSERVATIONS; ++i)
+    std::vector<float> input_data(model_input_obs_dim_, 0.0f);
+    for (int i = 0; i < model_input_obs_dim_; ++i)
     {
-        input_data[i] = obs_scaled_(i);
+        input_data[i] = obs_model_input_(i);
     }
 
     // 输入和输出的形状张量
-    std::array<int64_t, 2> input_shape{1, NUM_OBSERVATIONS};
+    std::array<int64_t, 2> input_shape{1, static_cast<int64_t>(model_input_obs_dim_)};
     std::array<int64_t, 2> output_shape{1, NUM_ACTIONS};
 
     // 创建输入和输出张量
@@ -310,10 +447,21 @@ void Locomotion::runInference()
     {
         act_prev_(i) = output_data[i];
     }
-    
+
     // 使用互斥锁确保对共享变量的安全访问
     std::lock_guard<std::mutex> lock(action_mutex_);
-    act_scaled_ = act_prev_.cwiseProduct(act_scales_) + act_mean_;
+    for (int i = 0; i < NUM_ACTIONS; ++i)
+    {
+        float cmd = act_prev_(i) * act_scales_(i) + act_mean_(i);
+        if (enable_action_safety_)
+        {
+            const float lower_step = act_temp_(i) - action_delta_limit_;
+            const float upper_step = act_temp_(i) + action_delta_limit_;
+            cmd = std::clamp(cmd, lower_step, upper_step);
+            cmd = std::clamp(cmd, -action_abs_limit_, action_abs_limit_);
+        }
+        act_scaled_(i) = cmd;
+    }
 }
 
 void Locomotion::inferenceLoop()
@@ -325,7 +473,22 @@ void Locomotion::inferenceLoop()
 
         ++counter_;
         collectObservations(); // 收集观测数据
-        runInference(); // 推理
+        try
+        {
+            runInference(); // 推理
+        }
+        catch (const Ort::Exception &e)
+        {
+            RCLCPP_ERROR(node_->get_logger(), "ONNX inference failed: %s", e.what());
+            thread_running_ = false;
+            break;
+        }
+        catch (const std::exception &e)
+        {
+            RCLCPP_ERROR(node_->get_logger(), "Inference failed: %s", e.what());
+            thread_running_ = false;
+            break;
+        }
 
         auto end = start + std::chrono::duration<double>(dt_);
         std::this_thread::sleep_until(end);

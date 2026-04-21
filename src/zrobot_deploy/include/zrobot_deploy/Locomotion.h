@@ -40,12 +40,16 @@ private:
     // 观测和动作维度
     static constexpr int NUM_OBSERVATIONS = 47;
     static constexpr int NUM_ACTIONS = 12;
+
+    // 模型输入维度（通常为 NUM_OBSERVATIONS * 历史帧数）
+    int model_input_obs_dim_;
     
     // 数据缓冲区
     Eigen::VectorXf obs_current_;     // 当前观测 (47维)
     Eigen::VectorXf obs_scaled_;      // 缩放后的观测
     Eigen::VectorXf obs_mean_;        // 观测均值
     Eigen::VectorXf obs_scales_;      // 观测缩放系数
+    Eigen::VectorXf obs_model_input_; // 提供给模型的输入向量（可包含历史堆叠）
     
     Eigen::VectorXf act_prev_;        // 上一次动作 (12维)
     Eigen::VectorXf act_scaled_;      // 缩放后的动作
@@ -72,6 +76,16 @@ private:
     std::thread inference_thread_;
     std::atomic<bool> thread_running_;
     std::mutex action_mutex_;                     // 动作数据锁
+
+     // 启动与安全保护
+     std::atomic<bool> imu_received_;
+     std::atomic<bool> motor_feedback_ready_;
+     bool require_imu_before_locomotion_;
+     bool enable_action_safety_;
+     double startup_hold_seconds_;
+     float action_delta_limit_;
+     float action_abs_limit_;
+     std::chrono::steady_clock::time_point init_time_;
     
     // ===== 控制参数 =====
     double dt_;                                   // 控制周期 (秒)
