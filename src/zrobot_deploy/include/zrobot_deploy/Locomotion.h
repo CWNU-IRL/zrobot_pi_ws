@@ -11,6 +11,8 @@
 #include <atomic>
 #include <chrono>
 #include <vector>
+#include <deque>
+#include <array>
 
 // Locomotion 状态机 - 使用 ONNX 模型进行强化学习推理控制
 class Locomotion : public FSM
@@ -38,28 +40,20 @@ private:
     std::vector<const char*> output_names_;
     
     // 观测和动作维度
-    static constexpr int NUM_OBSERVATIONS = 47;
+    static constexpr int NUM_SINGLE_OBS = 47;
     static constexpr int NUM_ACTIONS = 12;
-
-    // 模型输入维度（通常为 NUM_OBSERVATIONS * 历史帧数）
-    int model_input_obs_dim_;
+    static constexpr int NUM_MOTORS = 23;
     
     // 数据缓冲区
-    Eigen::VectorXf obs_current_;     // 当前观测 (47维)
-    Eigen::VectorXf obs_scaled_;      // 缩放后的观测
-    Eigen::VectorXf obs_mean_;        // 观测均值
-    Eigen::VectorXf obs_scales_;      // 观测缩放系数
-    Eigen::VectorXf obs_model_input_; // 提供给模型的输入向量（可包含历史堆叠）
+    Eigen::VectorXf obs_current_;     // 当前单帧观测 (47维)
+    std::deque<Eigen::VectorXf> obs_history_;  // 历史观测帧
+    Eigen::VectorXf policy_input_;    // 拼接后的模型输入
     
-    Eigen::VectorXf act_prev_;        // 上一次动作 (12维)
-    Eigen::VectorXf act_scaled_;      // 缩放后的动作
+    Eigen::VectorXf act_prev_;        // 上一次原始动作 (12维)
+    Eigen::VectorXf act_scaled_;      // 缩放后的动作增量 (12维)
     Eigen::VectorXf act_temp_;        // 临时动作缓冲（用于线程安全复制）
-    Eigen::VectorXf act_mean_;        // 动作均值
-    Eigen::VectorXf act_scales_;      // 动作缩放系数
-    
-    // PD 控制参数
-    Eigen::VectorXf stiffness_;       // 刚度 Kp (12维)
-    Eigen::VectorXf damping_;         // 阻尼 Kd (12维)
+    Eigen::VectorXf default_pose_;    // 默认姿态 (12维)
+    std::array<int, NUM_ACTIONS> dof_indices_;  // 12维策略动作映射到23维电机索引
     
     // ===== ROS 话题订阅相关 =====
     rclcpp::Subscription<sensor_msgs::msg::Imu>::SharedPtr imu_sub_;
@@ -68,6 +62,7 @@ private:
     // 当前传感器数据
     Eigen::Vector3f current_angular_velocity_;   // 角速度 (3维)
     Eigen::Vector3f current_gravity_vector_;     // 重力向量 (3维)
+    Eigen::Vector3f current_euler_;              // 欧拉角 (roll, pitch, yaw)
     Eigen::Vector3f current_command_;            // 遥控命令 (3维: vx, vy, wz)
     
     std::mutex sensor_data_mutex_;               // 传感器数据锁
@@ -90,7 +85,17 @@ private:
     // ===== 控制参数 =====
     double dt_;                                   // 控制周期 (秒)
     double phase_period_;                         // 相位周期 (秒)
+    int frame_stack_;                             // 观测堆叠帧数
+    int model_obs_dim_;                           // 模型输入维度
+    float action_scale_;                          // 动作缩放
+    float obs_clip_;                              // 观测裁剪
+    float act_clip_;                              // 动作裁剪
+    float obs_scale_lin_vel_;                     // cmd线速度缩放
+    float obs_scale_ang_vel_;                     // cmd角速度缩放
+    float obs_scale_dof_pos_;                     // 关节角缩放
+    float obs_scale_dof_vel_;                     // 关节速度缩放
     int counter_;                                 // 循环计数器（用于相位计算）
+    bool model_ready_;                            // 模型是否可推理
 
     // 加载 ONNX 模型
     void loadPolicy(const std::string& model_path);

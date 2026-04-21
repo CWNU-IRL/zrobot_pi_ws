@@ -3,6 +3,8 @@
 #include <tf2/LinearMath/Matrix3x3.h>
 #include <algorithm>
 #include <cmath>
+#include <stdexcept>
+#include <vector>
 
 Locomotion::Locomotion(std::shared_ptr<rclcpp::Node> node)
     : FSM(node),
@@ -18,32 +20,25 @@ Locomotion::Locomotion(std::shared_ptr<rclcpp::Node> node)
     action_delta_limit_(0.08f),
     action_abs_limit_(1.5f),
       dt_(0.01),
-      phase_period_(0.8),
-      counter_(0)
+            phase_period_(0.64),
+            frame_stack_(15),
+            model_obs_dim_(NUM_SINGLE_OBS * 15),
+            action_scale_(0.25f),
+            obs_clip_(100.0f),
+            act_clip_(100.0f),
+            obs_scale_lin_vel_(1.0f),
+            obs_scale_ang_vel_(1.0f),
+            obs_scale_dof_pos_(1.0f),
+            obs_scale_dof_vel_(1.0f),
+            counter_(0),
+            model_ready_(false)
 {
-    current_state_ = FSMState::IDLE;
-    // 观测数据
-    obs_current_.setZero(NUM_OBSERVATIONS);
-    obs_scaled_.setZero(NUM_OBSERVATIONS);
-    obs_mean_.setZero(NUM_OBSERVATIONS);
-    obs_scales_.setZero(NUM_OBSERVATIONS);
-    model_input_obs_dim_ = NUM_OBSERVATIONS;
-    obs_model_input_.setZero(model_input_obs_dim_);
-    // 动作数据
-    act_prev_.setZero(NUM_ACTIONS);
-    act_scaled_.setZero(NUM_ACTIONS);
-    act_temp_.setZero(NUM_ACTIONS);
-    act_mean_.setZero(NUM_ACTIONS);
-    act_scales_.setZero(NUM_ACTIONS);
-    // 控制参数
-    stiffness_.setZero(NUM_ACTIONS);
-    damping_.setZero(NUM_ACTIONS);
-    // 传感器数据初始化
-    current_angular_velocity_.setZero();
-    current_gravity_vector_ << 0.0f, 0.0f, -1.0f;
-    current_command_.setZero();
+        current_angular_velocity_.setZero();
+        current_gravity_vector_ << 0.0f, 0.0f, -1.0f;
+        current_euler_.setZero();
+        current_command_.setZero();
 
-    RCLCPP_INFO(node_->get_logger(), "Locomotion FSM created");
+        dof_indices_ = {5, 4, 3, 2, 1, 0, 11, 10, 9, 8, 7, 6};
 }
 
 Locomotion::~Locomotion()
@@ -78,29 +73,10 @@ void Locomotion::initialize()
         "onnx_model_path", "/home/bill/Codes/policy.onnx");
     loadPolicy(model_path);
 
-    std::array<float, 23> startup_positions;
-    if (getCurrentPositions(startup_positions))
+    if (!model_ready_)
     {
-        current_motor_positions_ = startup_positions;
-        for (int i = 0; i < NUM_ACTIONS; ++i)
-        {
-            act_temp_(i) = startup_positions[i];
-            act_scaled_(i) = startup_positions[i];
-        }
-
-        if (!sendMotorPositions(current_motor_positions_))
-        {
-            RCLCPP_WARN(node_->get_logger(), "Failed to seed motor feedback cache on Locomotion startup");
-            motor_feedback_ready_ = false;
-        }
-        else
-        {
-            motor_feedback_ready_ = true;
-        }
-    }
-    else
-    {
-        RCLCPP_WARN(node_->get_logger(), "Failed to read current positions on Locomotion startup, using fallback zeros");
+        RCLCPP_ERROR(node_->get_logger(), "Locomotion model is not ready, inference thread will not start");
+        return;
     }
     
     // 启动推理线程
@@ -157,7 +133,12 @@ void Locomotion::run()
     std::array<float, 23> positions = current_motor_positions_;
     for (int i = 0; i < NUM_ACTIONS; ++i)
     {
-        positions[i] = act_temp_(i);
+        const int motor_idx = dof_indices_[i];
+        if (motor_idx < 0 || motor_idx >= NUM_MOTORS)
+        {
+            continue;
+        }
+        positions[static_cast<size_t>(motor_idx)] = default_pose_(i) + act_temp_(i);
     }
 
     if (!sendMotorPositions(positions))
@@ -167,7 +148,6 @@ void Locomotion::run()
     else
     {
         current_motor_positions_ = positions;
-        motor_feedback_ready_ = true;
     }
 }
 
@@ -186,135 +166,162 @@ void Locomotion::exit()
 
 void Locomotion::loadPolicy(const std::string &model_path)
 {
-    constexpr int kMaxSupportedObsDim = 16384;
+    model_ready_ = false;
 
-    // 初始化ONNX Runtime环境
-    ort_env_ = std::make_unique<Ort::Env>(ORT_LOGGING_LEVEL_WARNING, "locomotion");
-    session_options_.SetIntraOpNumThreads(2);
-    session_options_.SetGraphOptimizationLevel(GraphOptimizationLevel::ORT_ENABLE_BASIC);
-
-    ort_session_ = std::make_unique<Ort::Session>(*ort_env_, model_path.c_str(), session_options_);
-    model_input_obs_dim_ = node_->declare_parameter<int>("model_obs_dim", NUM_OBSERVATIONS * 15);
-
-    if (model_input_obs_dim_ <= 0 || model_input_obs_dim_ > kMaxSupportedObsDim)
+    try
     {
-        model_input_obs_dim_ = NUM_OBSERVATIONS;
-        RCLCPP_WARN(node_->get_logger(),
-                    "Invalid model_input_obs_dim, fallback to %d",
-                    model_input_obs_dim_);
-    }
-    obs_model_input_.setZero(model_input_obs_dim_);
+        // 初始化ONNX Runtime环境
+        ort_env_ = std::make_unique<Ort::Env>(ORT_LOGGING_LEVEL_WARNING, "locomotion");
+        session_options_.SetIntraOpNumThreads(2);
+        session_options_.SetGraphOptimizationLevel(GraphOptimizationLevel::ORT_ENABLE_BASIC);
 
-    if (model_input_obs_dim_ % NUM_OBSERVATIONS == 0)
-    {
+        ort_session_ = std::make_unique<Ort::Session>(*ort_env_, model_path.c_str(), session_options_);
+
+        const size_t input_count = ort_session_->GetInputCount();
+        const size_t output_count = ort_session_->GetOutputCount();
+        if (input_count == 0 || output_count == 0)
+        {
+            throw std::runtime_error("ONNX model has empty input/output");
+        }
+
+        input_names_storage_.clear();
+        output_names_storage_.clear();
+        input_names_.clear();
+        output_names_.clear();
+
+        // 使用默认的内存分配器
+        Ort::AllocatorWithDefaultOptions allocator;
+        auto input_name = ort_session_->GetInputNameAllocated(0, allocator);
+        auto output_name = ort_session_->GetOutputNameAllocated(0, allocator);
+        input_names_storage_.emplace_back(input_name.get());
+        output_names_storage_.emplace_back(output_name.get());
+
+        for (const auto &name : input_names_storage_)
+        {
+            input_names_.push_back(name.c_str());
+        }
+        for (const auto &name : output_names_storage_)
+        {
+            output_names_.push_back(name.c_str());
+        }
+
+        const auto input_info = ort_session_->GetInputTypeInfo(0).GetTensorTypeAndShapeInfo();
+        const auto output_info = ort_session_->GetOutputTypeInfo(0).GetTensorTypeAndShapeInfo();
+        const auto input_shape = input_info.GetShape();
+        const auto output_shape = output_info.GetShape();
+
+        if (!input_shape.empty() && input_shape.back() > 0 &&
+            input_shape.back() != static_cast<int64_t>(model_obs_dim_))
+        {
+            throw std::runtime_error("Model input dim does not match model_obs_dim parameter");
+        }
+
+        if (!output_shape.empty() && output_shape.back() > 0 &&
+            output_shape.back() < static_cast<int64_t>(NUM_ACTIONS))
+        {
+            throw std::runtime_error("Model output dim is smaller than NUM_ACTIONS");
+        }
+
+        model_ready_ = true;
         RCLCPP_INFO(node_->get_logger(),
-                    "ONNX obs dim: %d (%d-frame stacked observations)",
-                    model_input_obs_dim_,
-                    model_input_obs_dim_ / NUM_OBSERVATIONS);
+                    "Loaded ONNX model: %s, obs_dim=%d, frame_stack=%d",
+                    model_path.c_str(), model_obs_dim_, frame_stack_);
     }
-    else
+    catch (const std::exception &e)
     {
-        RCLCPP_WARN(node_->get_logger(),
-                    "ONNX obs dim: %d (not multiple of %d), using rolling append with truncation/padding",
-                    model_input_obs_dim_, NUM_OBSERVATIONS);
+        RCLCPP_ERROR(node_->get_logger(), "Failed to load ONNX model: %s", e.what());
+        model_ready_ = false;
     }
-
-    // 使用默认的内存分配器
-    input_names_storage_.clear();
-    output_names_storage_.clear();
-    Ort::AllocatorWithDefaultOptions allocator;
-    auto input_name = ort_session_->GetInputNameAllocated(0, allocator);
-    auto output_name = ort_session_->GetOutputNameAllocated(0, allocator);
-    input_names_storage_.emplace_back(input_name ? input_name.get() : "obs");
-    output_names_storage_.emplace_back(output_name ? output_name.get() : "action");
-
-    input_names_.clear();
-    output_names_.clear();
-    for (const auto &name : input_names_storage_)
-    {
-        input_names_.push_back(name.c_str());
-    }
-    for (const auto &name : output_names_storage_)
-    {
-        output_names_.push_back(name.c_str());
-    }
-
-    RCLCPP_INFO(node_->get_logger(), "Loaded ONNX model: %s", model_path.c_str());
 }
 
 void Locomotion::initializeParameters()
 {
-    // 读取参数
     dt_ = node_->declare_parameter<double>("control_dt", 0.01);
-    phase_period_ = node_->declare_parameter<double>("phase_period", 0.8);
-    require_imu_before_locomotion_ = node_->declare_parameter<bool>("require_imu", true);
-    startup_hold_seconds_ = node_->declare_parameter<double>("startup_hold_seconds", 0.5);
-    enable_action_safety_ = node_->declare_parameter<bool>("enable_action_safety", true);
-    action_delta_limit_ = static_cast<float>(node_->declare_parameter<double>("max_action_step", 0.08));
-    action_abs_limit_ = static_cast<float>(node_->declare_parameter<double>("max_action_abs", 1.5));
+    phase_period_ = node_->declare_parameter<double>("phase_period", 0.64);
+    frame_stack_ = node_->declare_parameter<int>("frame_stack", 15);
+    model_obs_dim_ = node_->declare_parameter<int>("model_obs_dim", NUM_SINGLE_OBS * frame_stack_);
 
-    if (startup_hold_seconds_ < 0.0)
-    {
-        startup_hold_seconds_ = 0.0;
-    }
-    if (action_delta_limit_ < 0.0f)
-    {
-        action_delta_limit_ = 0.0f;
-    }
-    if (action_abs_limit_ <= 0.0f)
-    {
-        action_abs_limit_ = 1.5f;
-    }
+    action_scale_ = static_cast<float>(node_->declare_parameter<double>("action_scale", 0.25));
+    obs_clip_ = static_cast<float>(node_->declare_parameter<double>("clip_observations", 100.0));
+    act_clip_ = static_cast<float>(node_->declare_parameter<double>("clip_actions", 100.0));
 
-    std::vector<double> default_angles = node_->declare_parameter<std::vector<double>>(
-        "default_angles", std::vector<double>(NUM_ACTIONS, 0.0));
+    obs_scale_lin_vel_ = static_cast<float>(node_->declare_parameter<double>("obs_scale_lin_vel", 1.0));
+    obs_scale_ang_vel_ = static_cast<float>(node_->declare_parameter<double>("obs_scale_ang_vel", 1.0));
+    obs_scale_dof_pos_ = static_cast<float>(node_->declare_parameter<double>("obs_scale_dof_pos", 1.0));
+    obs_scale_dof_vel_ = static_cast<float>(node_->declare_parameter<double>("obs_scale_dof_vel", 1.0));
 
-    std::vector<double> kps = node_->declare_parameter<std::vector<double>>(
-        "kps", std::vector<double>(NUM_ACTIONS, 30.0));
-    std::vector<double> kds = node_->declare_parameter<std::vector<double>>(
-        "kds", std::vector<double>(NUM_ACTIONS, 1.0));
-    
-    obs_mean_.setZero(NUM_OBSERVATIONS);
-    default_angles.resize(NUM_ACTIONS, 0.0);
-    kps.resize(NUM_ACTIONS, 30.0);
-    kds.resize(NUM_ACTIONS, 1.0);
-    for (int i = 0; i < NUM_ACTIONS; ++i)
+    auto default_pose_param = node_->declare_parameter<std::vector<double>>(
+        "default_pose", std::vector<double>(NUM_ACTIONS, 0.0));
+    auto dof_indices_param = node_->declare_parameter<std::vector<int64_t>>(
+        "dof_indices", std::vector<int64_t>{5, 4, 3, 2, 1, 0, 11, 10, 9, 8, 7, 6});
+
+    if (frame_stack_ <= 0)
     {
-        obs_mean_(9 + i) = static_cast<float>(default_angles[i]);
+        RCLCPP_WARN(node_->get_logger(), "Invalid frame_stack=%d, fallback to 15", frame_stack_);
+        frame_stack_ = 15;
     }
 
-    // 缩放系数、读取自配置文件
-    double obs_scale_ang_vel = node_->declare_parameter<double>("ang_vel_scale", 1.0);
-    double obs_scale_dof_pos = node_->declare_parameter<double>("dof_pos_scale", 1.0);
-    double obs_scale_dof_vel = node_->declare_parameter<double>("dof_vel_scale", 1.0);
-    double action_scale = node_->declare_parameter<double>("action_scale", 1.0);
-
-    obs_scales_.setZero(NUM_OBSERVATIONS);
-    obs_scales_.segment<3>(0) = Eigen::Vector3f::Ones() * static_cast<float>(obs_scale_ang_vel);
-    obs_scales_.segment<3>(3) = Eigen::Vector3f::Ones();
-    obs_scales_.segment<3>(6) = Eigen::Vector3f::Ones();
-    obs_scales_.segment<12>(9) = Eigen::Vector<float, 12>::Ones() * static_cast<float>(obs_scale_dof_pos);
-    obs_scales_.segment<12>(21) = Eigen::Vector<float, 12>::Ones() * static_cast<float>(obs_scale_dof_vel);
-    obs_scales_.segment<12>(33) = Eigen::Vector<float, 12>::Ones();
-    obs_scales_.segment<2>(45) = Eigen::Vector2f::Ones();
-
-    // 动作均值和缩放
-    act_mean_.setZero(NUM_ACTIONS);
-    for (int i = 0; i < NUM_ACTIONS; ++i)
+    if (model_obs_dim_ != NUM_SINGLE_OBS * frame_stack_)
     {
-        act_mean_(i) = static_cast<float>(default_angles[i]);
+        if (model_obs_dim_ > 0 && model_obs_dim_ % NUM_SINGLE_OBS == 0)
+        {
+            frame_stack_ = model_obs_dim_ / NUM_SINGLE_OBS;
+            RCLCPP_WARN(node_->get_logger(),
+                        "Adjusted frame_stack to %d based on model_obs_dim=%d",
+                        frame_stack_, model_obs_dim_);
+        }
+        else
+        {
+            model_obs_dim_ = NUM_SINGLE_OBS * frame_stack_;
+            RCLCPP_WARN(node_->get_logger(),
+                        "Invalid model_obs_dim, fallback to %d",
+                        model_obs_dim_);
+        }
     }
 
-    act_scales_.setZero(NUM_ACTIONS);
-    act_scales_.segment<12>(0) = Eigen::Vector<float, 12>::Ones() * static_cast<float>(action_scale);
-
-    for (int i = 0; i < NUM_ACTIONS; ++i)
+    default_pose_ = Eigen::VectorXf::Zero(NUM_ACTIONS);
+    if (default_pose_param.size() != NUM_ACTIONS)
     {
-        stiffness_(i) = static_cast<float>(kps[i]);
-        damping_(i) = static_cast<float>(kds[i]);
+        RCLCPP_WARN(node_->get_logger(), "default_pose size=%zu, expected=%d, fallback to zeros",
+                    default_pose_param.size(), NUM_ACTIONS);
+    }
+    else
+    {
+        for (int i = 0; i < NUM_ACTIONS; ++i)
+        {
+            default_pose_(i) = static_cast<float>(default_pose_param[static_cast<size_t>(i)]);
+        }
     }
 
-    RCLCPP_INFO(node_->get_logger(), "Locomotion parameters initialized");
+    if (dof_indices_param.size() != NUM_ACTIONS)
+    {
+        RCLCPP_WARN(node_->get_logger(), "dof_indices size=%zu, expected=%d, using defaults",
+                    dof_indices_param.size(), NUM_ACTIONS);
+        dof_indices_ = {5, 4, 3, 2, 1, 0, 11, 10, 9, 8, 7, 6};
+    }
+    else
+    {
+        for (int i = 0; i < NUM_ACTIONS; ++i)
+        {
+            dof_indices_[i] = static_cast<int>(dof_indices_param[static_cast<size_t>(i)]);
+        }
+    }
+
+    obs_current_ = Eigen::VectorXf::Zero(NUM_SINGLE_OBS);
+    policy_input_ = Eigen::VectorXf::Zero(model_obs_dim_);
+    act_prev_ = Eigen::VectorXf::Zero(NUM_ACTIONS);
+    act_scaled_ = Eigen::VectorXf::Zero(NUM_ACTIONS);
+    act_temp_ = Eigen::VectorXf::Zero(NUM_ACTIONS);
+
+    obs_history_.clear();
+    for (int i = 0; i < frame_stack_; ++i)
+    {
+        obs_history_.push_back(Eigen::VectorXf::Zero(NUM_SINGLE_OBS));
+    }
+
+    RCLCPP_INFO(node_->get_logger(),
+                "Locomotion params: dt=%.4f, frame_stack=%d, model_obs_dim=%d, action_scale=%.3f",
+                dt_, frame_stack_, model_obs_dim_, action_scale_);
 }
 
 void Locomotion::imuCallback(const sensor_msgs::msg::Imu::SharedPtr msg)
@@ -336,7 +343,14 @@ void Locomotion::imuCallback(const sensor_msgs::msg::Imu::SharedPtr msg)
     current_gravity_vector_(0) = static_cast<float>(gravity_body.x());
     current_gravity_vector_(1) = static_cast<float>(gravity_body.y());
     current_gravity_vector_(2) = static_cast<float>(gravity_body.z());
-    imu_received_ = true;
+
+    double roll = 0.0;
+    double pitch = 0.0;
+    double yaw = 0.0;
+    rot.getRPY(roll, pitch, yaw);
+    current_euler_(0) = static_cast<float>(roll);
+    current_euler_(1) = static_cast<float>(pitch);
+    current_euler_(2) = static_cast<float>(yaw);
 }
 
 void Locomotion::cmdCallback(const geometry_msgs::msg::Twist::SharedPtr msg)
@@ -349,119 +363,136 @@ void Locomotion::cmdCallback(const geometry_msgs::msg::Twist::SharedPtr msg)
 
 void Locomotion::collectObservations()
 {
-    obs_current_.setZero(NUM_OBSERVATIONS);
+    if (phase_period_ <= 1e-6)
+    {
+        phase_period_ = 0.64;
+    }
 
-    // 读取传感器数据
+    Eigen::Vector3f command;
+    Eigen::Vector3f omega;
+    Eigen::Vector3f euler;
     {
         std::lock_guard<std::mutex> lock(sensor_data_mutex_);
-        obs_current_.segment<3>(0) = current_angular_velocity_;
-        obs_current_.segment<3>(3) = current_gravity_vector_;
-        obs_current_.segment<3>(6) = current_command_;
+        command = current_command_;
+        omega = current_angular_velocity_;
+        euler = current_euler_;
     }
 
-    // 读取电机反馈
-    if (motor_feedback_ready_ && getMotorFeedback(feedback_positions_, feedback_velocities_, feedback_torques_, feedback_temperatures_))
+    const double phase = 2.0 * M_PI * static_cast<double>(counter_) * dt_ / phase_period_;
+    obs_current_.setZero();
+    obs_current_(0) = static_cast<float>(std::sin(phase));
+    obs_current_(1) = static_cast<float>(std::cos(phase));
+    obs_current_(2) = command(0) * obs_scale_lin_vel_;
+    obs_current_(3) = command(1) * obs_scale_lin_vel_;
+    obs_current_(4) = command(2) * obs_scale_ang_vel_;
+
+    for (int i = 0; i < NUM_ACTIONS; ++i)
     {
-        current_motor_positions_ = feedback_positions_;
-        for (int j = 0; j < NUM_ACTIONS; ++j)
+        const int idx = dof_indices_[i];
+        if (idx < 0 || idx >= NUM_MOTORS)
         {
-            obs_current_(9 + j) = feedback_positions_[j];
-            obs_current_(21 + j) = feedback_velocities_[j];
+            continue;
         }
-    }
-    else
-    {
-        for (int j = 0; j < NUM_ACTIONS; ++j)
-        {
-            obs_current_(9 + j) = current_motor_positions_[j];
-            obs_current_(21 + j) = 0.0f;
-        }
+
+        const float q_rel = feedback_positions_[static_cast<size_t>(idx)] - default_pose_(i);
+        const float dq = feedback_velocities_[static_cast<size_t>(idx)];
+
+        obs_current_(5 + i) = q_rel * obs_scale_dof_pos_;
+        obs_current_(17 + i) = dq * obs_scale_dof_vel_;
+        obs_current_(29 + i) = act_prev_(i);
     }
 
-    // 历史动作
-    obs_current_.segment<12>(33) = act_prev_;
+    obs_current_.segment(41, 3) = omega;
+    obs_current_.segment(44, 3) = euler;
 
-    // 步态周期相位
-    double count = static_cast<double>(counter_) * dt_;
-    double phase = std::fmod(count, phase_period_) / phase_period_;
-    float sin_phase = static_cast<float>(std::sin(2.0 * M_PI * phase));
-    float cos_phase = static_cast<float>(std::cos(2.0 * M_PI * phase));
-    obs_current_(45) = sin_phase;
-    obs_current_(46) = cos_phase;
-
-    // 标准化，obs_mean_和obs_scales_都是来自配置文件
-    obs_scaled_ = (obs_current_ - obs_mean_).cwiseProduct(obs_scales_); // 逐元素乘法
-
-    if (model_input_obs_dim_ == NUM_OBSERVATIONS)
+    for (int i = 0; i < NUM_SINGLE_OBS; ++i)
     {
-        obs_model_input_ = obs_scaled_;
+        obs_current_(i) = std::clamp(obs_current_(i), -obs_clip_, obs_clip_);
     }
-    else
+
+    obs_history_.push_back(obs_current_);
+    while (static_cast<int>(obs_history_.size()) > frame_stack_)
     {
-        const int append_dim = std::min(NUM_OBSERVATIONS, model_input_obs_dim_);
-        const int shift_dim = model_input_obs_dim_ - append_dim;
-        if (shift_dim > 0)
-        {
-            obs_model_input_.head(shift_dim) = obs_model_input_.segment(append_dim, shift_dim);
-        }
-        obs_model_input_.tail(append_dim) = obs_scaled_.head(append_dim);
+        obs_history_.pop_front();
     }
 }
 
 void Locomotion::runInference()
 {
-    std::vector<float> input_data(model_input_obs_dim_, 0.0f);
-    for (int i = 0; i < model_input_obs_dim_; ++i)
+    if (!model_ready_ || !ort_session_)
     {
-        input_data[i] = obs_model_input_(i);
+        return;
     }
 
-    // 输入和输出的形状张量
-    std::array<int64_t, 2> input_shape{1, static_cast<int64_t>(model_input_obs_dim_)};
-    std::array<int64_t, 2> output_shape{1, NUM_ACTIONS};
-
-    // 创建输入和输出张量
-    auto input_tensor = Ort::Value::CreateTensor<float>(
-        memory_info_,         // 内存信息，指定了张量数据的存储位置和分配器
-        input_data.data(),    // 数据指针，指向实际数据缓冲区的指针，即内存起始位置
-        input_data.size(),    // 数据大小
-        input_shape.data(),   // 形状指针，指向描述张量维度的整数数组
-        input_shape.size());  // 形状大小
-
-    std::vector<float> output_data(NUM_ACTIONS, 0.0f);
-    auto output_tensor = Ort::Value::CreateTensor<float>(
-        memory_info_,
-        output_data.data(),
-        output_data.size(),
-        output_shape.data(),
-        output_shape.size());
-
-    // 执行推理
-    ort_session_->Run(Ort::RunOptions{nullptr}, // 默认配置
-                      input_names_.data(),      // 输入的节点名称数组
-                      &input_tensor, 1,         // 输入张量指针和数量
-                      output_names_.data(),     // 输出的节点名称数组
-                      &output_tensor, 1);       // 输出张量指针和数量
-
-    for (int i = 0; i < NUM_ACTIONS; ++i)
+    if (static_cast<int>(obs_history_.size()) < frame_stack_)
     {
-        act_prev_(i) = output_data[i];
+        return;
     }
 
-    // 使用互斥锁确保对共享变量的安全访问
-    std::lock_guard<std::mutex> lock(action_mutex_);
-    for (int i = 0; i < NUM_ACTIONS; ++i)
+    if (policy_input_.size() != model_obs_dim_)
     {
-        float cmd = act_prev_(i) * act_scales_(i) + act_mean_(i);
-        if (enable_action_safety_)
+        policy_input_ = Eigen::VectorXf::Zero(model_obs_dim_);
+    }
+    policy_input_.setZero();
+
+    int offset = 0;
+    for (int i = 0; i < frame_stack_ && i < static_cast<int>(obs_history_.size()); ++i)
+    {
+        if (offset + NUM_SINGLE_OBS > model_obs_dim_)
         {
-            const float lower_step = act_temp_(i) - action_delta_limit_;
-            const float upper_step = act_temp_(i) + action_delta_limit_;
-            cmd = std::clamp(cmd, lower_step, upper_step);
-            cmd = std::clamp(cmd, -action_abs_limit_, action_abs_limit_);
+            break;
         }
-        act_scaled_(i) = cmd;
+        policy_input_.segment(offset, NUM_SINGLE_OBS) = obs_history_[static_cast<size_t>(i)];
+        offset += NUM_SINGLE_OBS;
     }
+
+    std::vector<float> input_data(static_cast<size_t>(model_obs_dim_));
+    for (int i = 0; i < model_obs_dim_; ++i)
+    {
+        input_data[static_cast<size_t>(i)] = policy_input_(i);
+    }
+
+    std::vector<int64_t> input_shape = {1, static_cast<int64_t>(model_obs_dim_)};
+    auto input_tensor = Ort::Value::CreateTensor<float>(
+        memory_info_, input_data.data(), input_data.size(), input_shape.data(), input_shape.size());
+
+    auto output_tensors = ort_session_->Run(
+        Ort::RunOptions{nullptr},
+        input_names_.data(),
+        &input_tensor,
+        1,
+        output_names_.data(),
+        1);
+
+    if (output_tensors.empty() || !output_tensors[0].IsTensor())
+    {
+        RCLCPP_WARN(node_->get_logger(), "ONNX inference returned empty output");
+        return;
+    }
+
+    const auto output_info = output_tensors[0].GetTensorTypeAndShapeInfo();
+    const size_t output_count = output_info.GetElementCount();
+    if (output_count < static_cast<size_t>(NUM_ACTIONS))
+    {
+        RCLCPP_WARN(node_->get_logger(), "ONNX output count=%zu, expected >=%d", output_count, NUM_ACTIONS);
+        return;
+    }
+
+    const float *output_data = output_tensors[0].GetTensorData<float>();
+    Eigen::VectorXf raw_action = Eigen::VectorXf::Zero(NUM_ACTIONS);
+    Eigen::VectorXf scaled_action = Eigen::VectorXf::Zero(NUM_ACTIONS);
+    for (int i = 0; i < NUM_ACTIONS; ++i)
+    {
+        const float clipped = std::clamp(output_data[static_cast<size_t>(i)], -act_clip_, act_clip_);
+        raw_action(i) = clipped;
+        scaled_action(i) = clipped * action_scale_;
+    }
+
+    {
+        std::lock_guard<std::mutex> lock(action_mutex_);
+        act_scaled_ = scaled_action;
+    }
+    act_prev_ = raw_action;
 }
 
 void Locomotion::inferenceLoop()
