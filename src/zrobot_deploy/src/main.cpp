@@ -1,5 +1,6 @@
 #include "zrobot_deploy/FSM.h"
 #include "zrobot_deploy/FixStand.h"
+#include "zrobot_deploy/Locomotion.h"
 #include <rclcpp/rclcpp.hpp>
 #include <memory>
 #include <termios.h>
@@ -58,6 +59,7 @@ void printMenu()
 {;
     std::cout << "========================================\n";
     std::cout << "  [F] - 启动 FixStand 状态机 (移动到机械零位)\n";
+    std::cout << "  [L] - 启动 Locomotion 状态机 (RL模型推理控制)\n";
     std::cout << "  [S] - 停止当前状态机\n";
     std::cout << "  [Q] - 退出程序\n";
     std::cout << "========================================\n\n";
@@ -108,6 +110,25 @@ int main(int argc, char** argv)
                     std::cout << "\n>>> FixStand 状态机已启动 <<<\n\n";
                     break;
                 }
+
+                case 'l':
+                case 'L':
+                {
+                    // 如果有正在运行的状态机，先退出
+                    if (current_fsm) {
+                        RCLCPP_INFO(node->get_logger(), "Stopping current FSM...");
+                        current_fsm->exit();
+                        current_fsm.reset();
+                    }
+
+                    // 创建并初始化 Locomotion 状态机
+                    RCLCPP_INFO(node->get_logger(), "Starting Locomotion FSM...");
+                    current_fsm = std::make_shared<Locomotion>(node);
+                    current_fsm->initialize();
+
+                    std::cout << "\n>>> Locomotion 状态机已启动 <<<\n\n";
+                    break;
+                }
                 
                 case 's':
                 case 'S':
@@ -138,7 +159,7 @@ int main(int argc, char** argv)
                 }
                 
                 default:
-                    std::cout << "\n未知命令，请使用 F/S/Q\n";
+                    std::cout << "\n未知命令，请使用 F/L/S/Q\n";
                     break;
             }
         }
