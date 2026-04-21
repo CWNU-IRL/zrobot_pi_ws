@@ -59,8 +59,8 @@ void Locomotion::initialize()
 
     // 订阅 IMU 和遥控命令
     imu_sub_ = node_->create_subscription<sensor_msgs::msg::Imu>(
-        node_->declare_parameter<std::string>("imu_topic", "imu/data"),
-        10,
+        node_->declare_parameter<std::string>("imu_topic", "/imu/data"),
+        rclcpp::SensorDataQoS(),
         std::bind(&Locomotion::imuCallback, this, std::placeholders::_1));
 
     cmd_sub_ = node_->create_subscription<geometry_msgs::msg::Twist>(
@@ -99,6 +99,16 @@ void Locomotion::run()
         return;
     }
 
+    const auto elapsed = std::chrono::duration<double>(Clock::now() - init_time_).count();
+    if (elapsed < startup_hold_seconds_)
+    {
+        if (!sendMotorPositions(current_motor_positions_))
+        {
+            RCLCPP_ERROR(node_->get_logger(), "Failed to hold motor positions during startup warmup");
+        }
+        return;
+    }
+
     if (require_imu_before_locomotion_ && !imu_received_)
     {
         RCLCPP_WARN_THROTTLE(
@@ -109,16 +119,6 @@ void Locomotion::run()
         if (!sendMotorPositions(current_motor_positions_))
         {
             RCLCPP_ERROR(node_->get_logger(), "Failed to hold motor positions while waiting IMU");
-        }
-        return;
-    }
-
-    const auto elapsed = std::chrono::duration<double>(Clock::now() - init_time_).count();
-    if (elapsed < startup_hold_seconds_)
-    {
-        if (!sendMotorPositions(current_motor_positions_))
-        {
-            RCLCPP_ERROR(node_->get_logger(), "Failed to hold motor positions during startup warmup");
         }
         return;
     }
@@ -326,31 +326,49 @@ void Locomotion::initializeParameters()
 
 void Locomotion::imuCallback(const sensor_msgs::msg::Imu::SharedPtr msg)
 {
+    imu_received_ = true;
+    RCLCPP_INFO_ONCE(node_->get_logger(), "Received IMU data, Locomotion IMU gate unlocked");
+
+    tf2::Quaternion q(
+        msg->orientation.x,
+        msg->orientation.y,
+        msg->orientation.z,
+        msg->orientation.w);
+
+    // Skip invalid IMU orientation to avoid propagating NaN into observations.
+    if (q.length2() < 1e-12)
+    {
+        RCLCPP_WARN_THROTTLE(
+            node_->get_logger(),
+            *node_->get_clock(),
+            2000,
+            "Received invalid IMU orientation (near-zero quaternion), keeping previous attitude estimate");
+    }
+
     std::lock_guard<std::mutex> lock(sensor_data_mutex_);
     current_angular_velocity_(0) = static_cast<float>(msg->angular_velocity.x);
     current_angular_velocity_(1) = static_cast<float>(msg->angular_velocity.y);
     current_angular_velocity_(2) = static_cast<float>(msg->angular_velocity.z);
 
     // 通过姿态计算重力向量在机体坐标系下的投影
-    tf2::Quaternion q(
-        msg->orientation.x,
-        msg->orientation.y,
-        msg->orientation.z,
-        msg->orientation.w);
-    tf2::Matrix3x3 rot(q);
-    tf2::Vector3 gravity_world(0.0, 0.0, -1.0);
-    tf2::Vector3 gravity_body = rot.transpose() * gravity_world;
-    current_gravity_vector_(0) = static_cast<float>(gravity_body.x());
-    current_gravity_vector_(1) = static_cast<float>(gravity_body.y());
-    current_gravity_vector_(2) = static_cast<float>(gravity_body.z());
+    if (q.length2() >= 1e-12)
+    {
+        q.normalize();
+        tf2::Matrix3x3 rot(q);
+        tf2::Vector3 gravity_world(0.0, 0.0, -1.0);
+        tf2::Vector3 gravity_body = rot.transpose() * gravity_world;
+        current_gravity_vector_(0) = static_cast<float>(gravity_body.x());
+        current_gravity_vector_(1) = static_cast<float>(gravity_body.y());
+        current_gravity_vector_(2) = static_cast<float>(gravity_body.z());
 
-    double roll = 0.0;
-    double pitch = 0.0;
-    double yaw = 0.0;
-    rot.getRPY(roll, pitch, yaw);
-    current_euler_(0) = static_cast<float>(roll);
-    current_euler_(1) = static_cast<float>(pitch);
-    current_euler_(2) = static_cast<float>(yaw);
+        double roll = 0.0;
+        double pitch = 0.0;
+        double yaw = 0.0;
+        rot.getRPY(roll, pitch, yaw);
+        current_euler_(0) = static_cast<float>(roll);
+        current_euler_(1) = static_cast<float>(pitch);
+        current_euler_(2) = static_cast<float>(yaw);
+    }
 }
 
 void Locomotion::cmdCallback(const geometry_msgs::msg::Twist::SharedPtr msg)
