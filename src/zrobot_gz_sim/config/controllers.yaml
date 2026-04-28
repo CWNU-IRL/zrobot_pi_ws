@@ -5,10 +5,10 @@ controller_manager:
     joint_state_broadcaster:
       type: joint_state_broadcaster/JointStateBroadcaster
 
-    joint_group_position_controller:
-      type: position_controllers/JointGroupPositionController
+    joint_group_effort_controller:
+      type: forward_command_controller/ForwardCommandController
 
-joint_group_position_controller:
+joint_group_effort_controller:
   ros__parameters:
     joints:
       - L_hip_roll_joint
@@ -23,9 +23,4 @@ joint_group_position_controller:
       - R_knee_joint
       - R_foot_pitch_joint
       - R_foot_roll_joint
-    command_interfaces:
-      - position
-    state_interfaces:
-      - position
-      - velocity
-      - effort
+    interface_name: effort

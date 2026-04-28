@@ -21,6 +21,12 @@ GazeboMotorBridgeNode::GazeboMotorBridgeNode()
 {
     // 从参数服务器读取参数，提供默认值
     joint_names_ = this->declare_parameter<std::vector<std::string>>("joint_names", default_joint_names());
+    
+    std::vector<double> default_kp(kNumMotors, 40.0);
+    std::vector<double> default_kd(kNumMotors, 1.0);
+    kp_ = this->declare_parameter<std::vector<double>>("kp", default_kp);
+    kd_ = this->declare_parameter<std::vector<double>>("kd", default_kd);
+    
     feedback_temperature_ = static_cast<float>(this->declare_parameter<double>("feedback_temperature", 35.0));
 
     // 检查 joint_names 是否为空，为空则使用默认值
@@ -66,9 +72,19 @@ GazeboMotorBridgeNode::GazeboMotorBridgeNode()
     last_velocities_.fill(0.0f);
     last_efforts_.fill(0.0f);
 
-    // 创建发布者，由joint_group_position_controller控制器订阅
+    // 检查并调整 kp_ 和 kd_ 的大小以匹配 active_joint_count_
+    if (kp_.size() < active_joint_count_) {
+        RCLCPP_WARN(get_logger(), "kp size (%zu) is less than active joints (%zu). Paddding with 40.0", kp_.size(), active_joint_count_);
+        kp_.resize(active_joint_count_, 40.0);
+    }
+    if (kd_.size() < active_joint_count_) {
+        RCLCPP_WARN(get_logger(), "kd size (%zu) is less than active joints (%zu). Paddding with 1.0", kd_.size(), active_joint_count_);
+        kd_.resize(active_joint_count_, 1.0);
+    }
+
+    // 创建发布者，由joint_group_effort_controller控制器订阅
     command_pub_ = create_publisher<std_msgs::msg::Float64MultiArray>(
-        "/joint_group_position_controller/commands", 10);
+        "/joint_group_effort_controller/commands", 10);
 
     // 订阅Gazebo的/joint_states话题，获取关节状态信息
     joint_state_sub_ = create_subscription<sensor_msgs::msg::JointState>(
@@ -112,6 +128,17 @@ std::vector<std::string> GazeboMotorBridgeNode::default_joint_names()
         names.emplace_back(buf);
     }
     return names;
+}
+
+double GazeboMotorBridgeNode::compute_tau(
+    double target_q,
+    double current_q,
+    double target_dq,
+    double current_dq,
+    double kp,
+    double kd) const
+{
+    return (target_q - current_q) * kp + (target_dq - current_dq) * kd;
 }
 
 
@@ -197,14 +224,21 @@ void GazeboMotorBridgeNode::on_rob_stride_control(
 
     {
         std::lock_guard<std::mutex> lock(state_mutex_);
-        for (size_t i = 0; i < active_joint_count_; ++i)
-        {
-            cmd.data[i] = static_cast<double>(request->positions[i] + zero_offsets_[i]);
-        }
+        
         // 储存当前关节反馈状态
         positions = last_positions_;
         velocities = last_velocities_;
         efforts = last_efforts_;
+
+        for (size_t i = 0; i < active_joint_count_; ++i)
+        {
+            double target_q = request->positions[i] + zero_offsets_[i];
+            double current_q = positions[i];
+            double current_dq = velocities[i];
+            double target_dq = 0.0;
+            double tau = compute_tau(target_q, current_q, target_dq, current_dq, kp_[i], kd_[i]);
+            cmd.data[i] = tau;
+        }
     }
 
     command_pub_->publish(cmd);

@@ -27,6 +27,14 @@ private:
 
     static std::vector<std::string> default_joint_names();
 
+    double compute_tau(
+        double target_q,
+        double current_q,
+        double target_dq,
+        double current_dq,
+        double kp,
+        double kd) const;
+
     void on_joint_state(const sensor_msgs::msg::JointState::SharedPtr msg);
 
     void on_rob_stride_control(
@@ -55,6 +63,9 @@ private:
 
     std::mutex state_mutex_;
     std::array<float, kNumMotors> zero_offsets_;
+
+    std::vector<double> kp_;
+    std::vector<double> kd_;
 
     // 接收到的关节状态
     std::array<float, kNumMotors> last_positions_;

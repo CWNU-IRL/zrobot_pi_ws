@@ -113,7 +113,7 @@ def generate_launch_description():
         package='controller_manager',
         executable='spawner',
         output='screen',
-        arguments=['joint_group_position_controller', '--controller-manager', '/controller_manager'],
+        arguments=['joint_group_effort_controller', '--controller-manager', '/controller_manager'],
         condition=controller_spawner_condition,
     )
 
