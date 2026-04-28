@@ -1,6 +1,9 @@
 cmake_minimum_required(VERSION 3.8)
 project(zrobot_deploy)
 
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
 if(CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
   add_compile_options(-Wall -Wextra -Wpedantic)
 endif()
@@ -15,6 +18,13 @@ find_package(geometry_msgs REQUIRED)
 find_package(Eigen3 REQUIRED)
 find_package(tf2 REQUIRED)
 
+set(LIBTORCH_DIR ${CMAKE_CURRENT_LIST_DIR}/../../third_party/libtorch)
+if(EXISTS ${LIBTORCH_DIR}/share/cmake/Torch/TorchConfig.cmake)
+        list(APPEND CMAKE_PREFIX_PATH ${LIBTORCH_DIR})
+endif()
+find_package(Torch REQUIRED)
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${TORCH_CXX_FLAGS}")
+
 set(ONNXRUNTIME_DIR ${CMAKE_CURRENT_LIST_DIR}/../../third_party/onnxruntime-linux-x64-1.16.3)
 set(ONNXRUNTIME_LIB_DIR ${ONNXRUNTIME_DIR}/lib)
 
@@ -26,10 +36,12 @@ add_executable(main src/main.cpp
         src/FSM.cpp
         src/FixStand.cpp
         src/Locomotion.cpp
+        src/PTLocomotion.cpp
         src/Damping.cpp
         include/zrobot_deploy/FSM.h
         include/zrobot_deploy/FixStand.h
         include/zrobot_deploy/Locomotion.h
+        include/zrobot_deploy/PTLocomotion.h
         include/zrobot_deploy/Damping.h
 )
 
@@ -44,6 +56,7 @@ ament_target_dependencies(main
 
 target_link_libraries(main
         ${ONNXRUNTIME_LIB_DIR}/libonnxruntime.so
+        ${TORCH_LIBRARIES}
 )
 
 # Keep runtime dependency local to installed executable directory.
@@ -58,6 +71,7 @@ target_include_directories(main
         /usr/include/eigen3
         /usr/include/onnxruntime
         ${ONNXRUNTIME_DIR}/include
+        ${TORCH_INCLUDE_DIRS}
 )
 
 install(TARGETS
@@ -70,6 +84,15 @@ install(FILES
         ${ONNXRUNTIME_LIB_DIR}/libonnxruntime.so.1.16.3
         DESTINATION lib/${PROJECT_NAME}
 )
+
+if(EXISTS ${LIBTORCH_DIR}/lib)
+  install(DIRECTORY
+          ${LIBTORCH_DIR}/lib/
+          DESTINATION lib/${PROJECT_NAME}
+          FILES_MATCHING
+          PATTERN "*.so"
+          PATTERN "*.so.*")
+endif()
 
 if(BUILD_TESTING)
   find_package(ament_lint_auto REQUIRED)

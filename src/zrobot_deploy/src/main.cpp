@@ -1,6 +1,7 @@
 #include "zrobot_deploy/FSM.h"
 #include "zrobot_deploy/FixStand.h"
 #include "zrobot_deploy/Locomotion.h"
+#include "zrobot_deploy/PTLocomotion.h"
 #include "zrobot_deploy/Damping.h"
 #include <rclcpp/rclcpp.hpp>
 #include <memory>
@@ -61,6 +62,7 @@ void printMenu()
     std::cout << "========================================\n";
     std::cout << "  [F] - 启动 FixStand 状态机 (移动到机械零位)\n";
     std::cout << "  [L] - 启动 Locomotion 状态机\n";
+    std::cout << "  [T] - 启动 PTLocomotion 状态机 (.pt 推理)\n";
     std::cout << "  [D] - 启动 Damping 状态机 (仿真阻尼模式)\n";
     std::cout << "  [S] - 停止当前状态机\n";
     std::cout << "  [Q] - 退出程序\n";
@@ -132,6 +134,23 @@ int main(int argc, char** argv)
                     break;
                 }
 
+                case 't':
+                case 'T':
+                {
+                    if (current_fsm) {
+                        RCLCPP_INFO(node->get_logger(), "Stopping current FSM...");
+                        current_fsm->exit();
+                        current_fsm.reset();
+                    }
+
+                    RCLCPP_INFO(node->get_logger(), "Starting PTLocomotion FSM...");
+                    current_fsm = std::make_shared<PTLocomotion>(node);
+                    current_fsm->initialize();
+
+                    std::cout << "\n>>> PTLocomotion 状态机已启动 <<<\n\n";
+                    break;
+                }
+
                 case 'd':
                 case 'D':
                 {
@@ -188,7 +207,7 @@ int main(int argc, char** argv)
                 }
                 
                 default:
-                    std::cout << "\n未知命令，请使用 F/L/D/S/Q\n";
+                    std::cout << "\n未知命令，请使用 F/L/T/D/S/Q\n";
                     break;
             }
         }
