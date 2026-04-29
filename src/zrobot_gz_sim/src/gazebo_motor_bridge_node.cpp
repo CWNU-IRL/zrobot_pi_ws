@@ -189,27 +189,27 @@ void GazeboMotorBridgeNode::on_joint_state(const sensor_msgs::msg::JointState::S
     has_joint_state_ = true;
 }
 
+
 /**
  * @brief 机器人步态控制服务回调函数
- * 
+ *
  * 处理来自客户端的步态控制请求，执行以下操作：
- * - 接收步态控制命令（目标关节位置）
- * - 添加零位偏移，将实际控制命令发送给 Gazebo 电机控制器
- * - 读取当前关节反馈信息（位置、速度、力矩）
- * - 返回反馈数据给客户端
- * 
- * @param request 步态控制请求，包含目标关节位置数组
+ * - 在互斥锁保护下，读取当前关节反馈状态并计算 PD 控制力矩
+ * - 将目标位置加上零位偏移，得到实际控制目标值
+ * - 通过 compute_tau() 计算控制力矩并发布到关节控制器
+ * - 释放锁后，将（减去零位偏移的）反馈数据填充到响应中
+ * - 若尚未接收到关节状态，返回失败
+ *
+ * @param request  步态控制请求，包含目标关节位置数组 positions[]
  * @param response 步态控制响应，包含反馈位置、速度、力矩、温度和执行状态
- * 
- * @note 采用双阶段加锁策略：
- *   - 第一阶段：在互斥锁保护下，准备命令数据和复制反馈数据
- *   - 第二阶段：释放互斥锁后，将命令发布到控制器并构建响应
- *   这种设计最小化了锁持有时间，提高了并发性能
- * 
- * @note 若未收到过关节状态消息，则返回失败状态；否则返回成功
- * 
- * @note 零位偏移用于校准原点，请求命令需要加上偏移后才是实际控制值
- * @note 反馈数据在返回给客户端前需要减去零位偏移，还原为相对原点的值
+ *
+ * @note 采用双阶段设计：
+ *   第一阶段在锁内拷贝反馈 + 计算力矩；第二阶段锁外发布命令 + 构建响应，
+ *   最小化锁持有时间，提高并发性能。
+ * @note 零位偏移用于原点校准：请求命令 + 偏移 = 实际控制值；
+ *       反馈值 - 偏移 = 相对原点的位置，供上层使用。
+ * @note 目标速度 target_dq 固定为 0.0，即 PD 控制仅对位置误差和当前速度做阻尼。
+ * @note 若从未收到过 /joint_states 消息，has_joint_state_ 为 false，返回失败。
  */
 void GazeboMotorBridgeNode::on_rob_stride_control(
     const std::shared_ptr<rs_interface::srv::RobStrideMsgs::Request> request,
