@@ -49,8 +49,11 @@ private:
         const std::shared_ptr<rs_interface::srv::SetZeros::Request> request,
         std::shared_ptr<rs_interface::srv::SetZeros::Response> response);
 
+    void control_loop();
+
     rclcpp::Publisher<std_msgs::msg::Float64MultiArray>::SharedPtr command_pub_;
     rclcpp::Subscription<sensor_msgs::msg::JointState>::SharedPtr joint_state_sub_;
+    rclcpp::TimerBase::SharedPtr control_timer_;
 
     rclcpp::Service<rs_interface::srv::RobStrideMsgs>::SharedPtr rob_stride_service_;
     rclcpp::Service<rs_interface::srv::GetPositions>::SharedPtr get_positions_service_;
@@ -74,6 +77,9 @@ private:
 
     float feedback_temperature_;
     bool has_joint_state_;
+
+    std::array<float, kNumMotors> target_positions_;
+    bool is_target_initialized_;
 };
 
 #endif

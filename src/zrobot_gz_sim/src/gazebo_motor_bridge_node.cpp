@@ -105,6 +105,14 @@ GazeboMotorBridgeNode::GazeboMotorBridgeNode()
         "/set_zeros",
         std::bind(&GazeboMotorBridgeNode::on_set_zeros, this, std::placeholders::_1, std::placeholders::_2));
 
+    is_target_initialized_ = false;
+    target_positions_.fill(0.0f);
+
+    // 创建定时器：2ms（500Hz），用于持续下发力矩维持站立
+    control_timer_ = create_wall_timer(
+        std::chrono::milliseconds(2), 
+        std::bind(&GazeboMotorBridgeNode::control_loop, this));
+
     // 输出初始化完成的日志信息
     RCLCPP_INFO(get_logger(), "Gazebo motor bridge is ready. Active joints: %zu", active_joint_count_);
 }
@@ -186,6 +194,11 @@ void GazeboMotorBridgeNode::on_joint_state(const sensor_msgs::msg::JointState::S
         }
     }
 
+    if (!is_target_initialized_) {
+        target_positions_ = last_positions_;
+        is_target_initialized_ = true;
+    }
+
     has_joint_state_ = true;
 }
 
@@ -233,6 +246,7 @@ void GazeboMotorBridgeNode::on_rob_stride_control(
         for (size_t i = 0; i < active_joint_count_; ++i)
         {
             double target_q = request->positions[i] + zero_offsets_[i];
+            target_positions_[i] = target_q; // 更新目标位置，供定时器使用
             double current_q = positions[i];
             double current_dq = velocities[i];
             double target_dq = 0.0;
@@ -331,6 +345,31 @@ void GazeboMotorBridgeNode::on_set_zeros(
     }
     response->success = true;
     response->message = "Zero offsets captured from current joint positions";
+}
+
+void GazeboMotorBridgeNode::control_loop()
+{
+    if (!is_target_initialized_) {
+        return; // 等待接收到第一个 joint_state
+    }
+
+    std_msgs::msg::Float64MultiArray cmd;
+    cmd.data.resize(active_joint_count_);
+
+    {
+        std::lock_guard<std::mutex> lock(state_mutex_);
+        for (size_t i = 0; i < active_joint_count_; ++i)
+        {
+            double target_q = target_positions_[i];
+            double current_q = last_positions_[i];
+            double current_dq = last_velocities_[i];
+            double target_dq = 0.0;
+            double tau = compute_tau(target_q, current_q, target_dq, current_dq, kp_[i], kd_[i]);
+            cmd.data[i] = tau;
+        }
+    }
+
+    command_pub_->publish(cmd);
 }
 
 int main(int argc, char **argv)
