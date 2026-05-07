@@ -108,9 +108,9 @@ GazeboMotorBridgeNode::GazeboMotorBridgeNode()
     is_target_initialized_ = false;
     target_positions_.fill(0.0f);
 
-    // 创建定时器：2ms（500Hz），用于持续下发力矩维持站立
+    // 创建定时器：5ms（200Hz），用于持续下发力矩维持站立
     control_timer_ = create_wall_timer(
-        std::chrono::milliseconds(2), 
+        std::chrono::milliseconds(5), 
         std::bind(&GazeboMotorBridgeNode::control_loop, this));
 
     // 输出初始化完成的日志信息

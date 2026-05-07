@@ -1400,7 +1400,7 @@
   </ros2_control>
 
   <gazebo>
-    <selfCollide>true</selfCollide>
+    <disableSelfCollision>true</disableSelfCollision>
   </gazebo>
   <gazebo>
     <plugin filename="libgz_ros2_control-system.so" name="gz_ros2_control::GazeboSimROS2ControlPlugin">
