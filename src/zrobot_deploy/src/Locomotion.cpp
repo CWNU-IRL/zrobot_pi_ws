@@ -205,8 +205,13 @@ void Locomotion::loadPolicy(const std::string &model_path)
             output_names_.push_back(name.c_str());
         }
 
-        const auto input_info = ort_session_->GetInputTypeInfo(0).GetTensorTypeAndShapeInfo();
-        const auto output_info = ort_session_->GetOutputTypeInfo(0).GetTensorTypeAndShapeInfo();
+        // Store TypeInfo first to keep the underlying OrtTypeInfo alive.
+        // GetTensorTypeAndShapeInfo() returns a non-owning wrapper whose
+        // pointer is invalidated when the TypeInfo temporary is destroyed.
+        auto input_type_info = ort_session_->GetInputTypeInfo(0);
+        auto output_type_info = ort_session_->GetOutputTypeInfo(0);
+        const auto input_info = input_type_info.GetTensorTypeAndShapeInfo();
+        const auto output_info = output_type_info.GetTensorTypeAndShapeInfo();
         const auto input_shape = input_info.GetShape();
         const auto output_shape = output_info.GetShape();
 
