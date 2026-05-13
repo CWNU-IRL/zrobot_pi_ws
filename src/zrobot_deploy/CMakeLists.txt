@@ -18,14 +18,24 @@ find_package(geometry_msgs REQUIRED)
 find_package(Eigen3 REQUIRED)
 find_package(tf2 REQUIRED)
 
-set(LIBTORCH_DIR ${CMAKE_CURRENT_LIST_DIR}/../../third_party/libtorch)
+## Select LibTorch based on system architecture
+if(CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64" OR CMAKE_SYSTEM_PROCESSOR MATCHES "arm64")
+        set(LIBTORCH_DIR /home/c112/.local/lib/python3.10/site-packages/torch)
+else()
+        set(LIBTORCH_DIR ${CMAKE_CURRENT_LIST_DIR}/../../third_party/libtorch)
+endif()
 if(EXISTS ${LIBTORCH_DIR}/share/cmake/Torch/TorchConfig.cmake)
         list(APPEND CMAKE_PREFIX_PATH ${LIBTORCH_DIR})
 endif()
 find_package(Torch REQUIRED)
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${TORCH_CXX_FLAGS}")
 
-set(ONNXRUNTIME_DIR ${CMAKE_CURRENT_LIST_DIR}/../../third_party/onnxruntime-linux-x64-1.16.3)
+## Select ONNX Runtime based on system architecture (x86_64 vs aarch64/arm64)
+if(CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64" OR CMAKE_SYSTEM_PROCESSOR MATCHES "arm64")
+        set(ONNXRUNTIME_DIR ${CMAKE_CURRENT_LIST_DIR}/../../third_party/onnxruntime-linux-aarch64-1.16.3)
+else()
+        set(ONNXRUNTIME_DIR ${CMAKE_CURRENT_LIST_DIR}/../../third_party/onnxruntime-linux-x64-1.16.3)
+endif()
 set(ONNXRUNTIME_LIB_DIR ${ONNXRUNTIME_DIR}/lib)
 
 include_directories(
