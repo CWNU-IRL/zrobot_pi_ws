@@ -70,7 +70,7 @@ void Locomotion::initialize()
 
     // 加载 ONNX 模型
     const auto model_path = node_->declare_parameter<std::string>(
-        "onnx_model_path", "/home/bill/Codes/policy.onnx");
+        "onnx_model_path", "/home/c112/Codes/policy/policy.onnx");
     loadPolicy(model_path);
 
     if (!model_ready_)
