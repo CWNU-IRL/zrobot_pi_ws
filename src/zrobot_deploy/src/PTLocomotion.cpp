@@ -83,7 +83,7 @@ void PTLocomotion::initialize()
         std::bind(&PTLocomotion::cmdCallback, this, std::placeholders::_1));
 
     model_path_ = getOrDeclareParameter<std::string>(
-        node_, "pt_model_path", "/home/c112/Codes/policy/policy_1.pt");
+        node_, "pt_model_path", std::string(POLICY_DIR) + "/policy_1.pt");
     loadPolicy(model_path_);
 
     if (!model_ready_)

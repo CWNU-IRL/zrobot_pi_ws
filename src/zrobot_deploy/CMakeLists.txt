@@ -104,6 +104,19 @@ if(EXISTS ${LIBTORCH_DIR}/lib)
           PATTERN "*.so.*")
 endif()
 
+# Define workspace-root-level policy directory as compile-time macro
+set(WORKSPACE_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../..")
+get_filename_component(WORKSPACE_ROOT_ABS "${WORKSPACE_ROOT}" ABSOLUTE)
+target_compile_definitions(main PRIVATE
+  POLICY_DIR="${WORKSPACE_ROOT_ABS}/resources/policy"
+)
+
+install(DIRECTORY
+  ${WORKSPACE_ROOT_ABS}/resources/policy/
+  DESTINATION share/${PROJECT_NAME}/policy
+  OPTIONAL
+)
+
 if(BUILD_TESTING)
   find_package(ament_lint_auto REQUIRED)
   # the following line skips the linter which checks for copyrights
