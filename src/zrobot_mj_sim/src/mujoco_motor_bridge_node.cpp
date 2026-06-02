@@ -8,6 +8,7 @@
 
 #include "ament_index_cpp/get_package_share_directory.hpp"
 #include "mujoco/mujoco.h"
+#include <GL/freeglut.h>
 
 namespace
 {
@@ -15,6 +16,8 @@ constexpr double kDefaultControlFrequency = 200.0;
 constexpr double kDefaultKp = 40.0;
 constexpr double kDefaultKd = 1.0;
 }
+
+MujocoMotorBridgeNode* MujocoMotorBridgeNode::render_instance_ = nullptr;
 
 MujocoMotorBridgeNode::MujocoMotorBridgeNode()
     : Node("mujoco_motor_bridge_node"),
@@ -31,6 +34,7 @@ MujocoMotorBridgeNode::MujocoMotorBridgeNode()
       model_(nullptr),
       data_(nullptr)
 {
+    render_instance_ = this;
     joint_names_ = declare_parameter<std::vector<std::string>>("joint_names", default_joint_names());
 
     std::vector<double> default_kp(kNumMotors, kDefaultKp);
@@ -160,11 +164,19 @@ MujocoMotorBridgeNode::MujocoMotorBridgeNode()
         std::chrono::duration_cast<std::chrono::nanoseconds>(period),
         std::bind(&MujocoMotorBridgeNode::control_loop, this));
 
+    start_render_thread();
+
     RCLCPP_INFO(get_logger(), "MuJoCo motor bridge ready. Active joints: %zu", active_joint_count_);
 }
 
 MujocoMotorBridgeNode::~MujocoMotorBridgeNode()
 {
+    render_running_ = false;
+    if (render_thread_.joinable())
+    {
+        render_thread_.join();
+    }
+
     if (data_)
     {
         mj_deleteData(data_);
@@ -591,6 +603,239 @@ rclcpp::Time MujocoMotorBridgeNode::current_sim_time_locked() const
 
     const int64_t nanos = static_cast<int64_t>(data_->time * 1e9);
     return rclcpp::Time(nanos, RCL_ROS_TIME);
+}
+
+void MujocoMotorBridgeNode::reset_simulation()
+{
+    if (!model_ || !data_)
+    {
+        RCLCPP_WARN(get_logger(), "Cannot reset: model not loaded.");
+        return;
+    }
+
+    {
+        std::lock_guard<std::mutex> lock(state_mutex_);
+
+        mj_resetData(model_, data_);
+        mj_forward(model_, data_);
+
+        zero_offsets_.fill(0.0f);
+        is_target_initialized_ = false;
+
+        for (size_t i = 0; i < kNumMotors; ++i)
+        {
+            if (i < active_joint_count_ && joint_handles_[i].valid)
+            {
+                target_positions_[i] = static_cast<float>(data_->qpos[joint_handles_[i].qpos_adr]);
+            }
+            else
+            {
+                target_positions_[i] = 0.0f;
+            }
+        }
+
+        update_state_from_sim_locked();
+    }
+
+    RCLCPP_INFO(get_logger(), "Simulation reset to initial state.");
+}
+
+void MujocoMotorBridgeNode::start_render_thread()
+{
+    render_running_ = true;
+    render_thread_ = std::thread(&MujocoMotorBridgeNode::render_loop, this);
+}
+
+void MujocoMotorBridgeNode::render_loop()
+{
+    int glut_argc = 0;
+    glutInit(&glut_argc, nullptr);
+
+    glutInitDisplayMode(GLUT_DOUBLE | GLUT_RGBA | GLUT_DEPTH);
+    glutInitWindowSize(render_width_, render_height_);
+    glutCreateWindow("zrobot - MuJoCo Viewer");
+
+    glutDisplayFunc(glut_display);
+    glutReshapeFunc(glut_reshape);
+    glutMouseFunc(glut_mouse);
+    glutMotionFunc(glut_motion);
+    glutKeyboardFunc(glut_keyboard);
+
+    glutSetOption(GLUT_ACTION_ON_WINDOW_CLOSE, GLUT_ACTION_CONTINUE_EXECUTION);
+
+    mjv_defaultCamera(&render_cam_);
+    mjv_defaultFreeCamera(model_, &render_cam_);
+    mjv_defaultOption(&render_opt_);
+    mjv_defaultPerturb(&render_pert_);
+
+    mjv_defaultScene(&render_scene_);
+    mjv_makeScene(model_, &render_scene_, 2000);
+
+    mjr_defaultContext(&render_context_);
+    mjr_makeContext(model_, &render_context_, mjFONTSCALE_150);
+
+    render_initialized_ = true;
+    RCLCPP_INFO(get_logger(), "MuJoCo renderer initialized (GLUT).");
+
+    while (render_running_)
+    {
+        glutMainLoopEvent();
+        if (!render_running_)
+        {
+            break;
+        }
+
+        int win = glutGetWindow();
+        if (win == 0)
+        {
+            render_running_ = false;
+            break;
+        }
+
+        render_scene();
+
+        std::this_thread::sleep_for(std::chrono::milliseconds(16));
+    }
+
+    mjr_freeContext(&render_context_);
+    mjv_freeScene(&render_scene_);
+
+    int win = glutGetWindow();
+    if (win != 0)
+    {
+        glutDestroyWindow(win);
+    }
+
+    render_initialized_ = false;
+    RCLCPP_INFO(get_logger(), "MuJoCo renderer stopped.");
+}
+
+void MujocoMotorBridgeNode::render_scene()
+{
+    if (!render_initialized_ || !model_ || !data_)
+    {
+        return;
+    }
+
+    {
+        std::lock_guard<std::mutex> lock(state_mutex_);
+        mjv_updateScene(model_, data_, &render_opt_, &render_pert_,
+                        &render_cam_, mjCAT_ALL, &render_scene_);
+    }
+
+    mjrRect viewport = {0, 0, render_width_, render_height_};
+    mjr_render(viewport, &render_scene_, &render_context_);
+    glutSwapBuffers();
+}
+
+/* static */ void MujocoMotorBridgeNode::glut_display()
+{
+    if (render_instance_)
+    {
+        render_instance_->render_scene();
+    }
+}
+
+/* static */ void MujocoMotorBridgeNode::glut_reshape(int width, int height)
+{
+    if (!render_instance_)
+    {
+        return;
+    }
+    render_instance_->render_width_ = width;
+    render_instance_->render_height_ = height;
+    glViewport(0, 0, width, height);
+}
+
+/* static */ void MujocoMotorBridgeNode::glut_mouse(int button, int state, int x, int y)
+{
+    if (!render_instance_)
+    {
+        return;
+    }
+
+    render_instance_->last_mouse_x_ = x;
+    render_instance_->last_mouse_y_ = y;
+
+    if (state == GLUT_DOWN)
+    {
+        if (button == GLUT_LEFT_BUTTON)
+        {
+            render_instance_->mouse_action_left_ = mjMOUSE_ROTATE_V;
+        }
+        else if (button == GLUT_RIGHT_BUTTON)
+        {
+            render_instance_->mouse_action_left_ = mjMOUSE_ZOOM;
+        }
+        else if (button == GLUT_MIDDLE_BUTTON)
+        {
+            render_instance_->mouse_action_left_ = mjMOUSE_MOVE_V;
+        }
+    }
+    else
+    {
+        render_instance_->mouse_action_left_ = mjMOUSE_NONE;
+    }
+}
+
+/* static */ void MujocoMotorBridgeNode::glut_motion(int x, int y)
+{
+    if (!render_instance_ || render_instance_->mouse_action_left_ == mjMOUSE_NONE)
+    {
+        return;
+    }
+
+    double dx = static_cast<double>(x - render_instance_->last_mouse_x_);
+    double dy = static_cast<double>(render_instance_->last_mouse_y_ - y);
+    render_instance_->last_mouse_x_ = x;
+    render_instance_->last_mouse_y_ = y;
+
+    {
+        std::lock_guard<std::mutex> lock(render_instance_->state_mutex_);
+        mjv_moveCamera(render_instance_->model_, render_instance_->mouse_action_left_,
+                       dx, dy, &render_instance_->render_scene_, &render_instance_->render_cam_);
+    }
+}
+
+/* static */ void MujocoMotorBridgeNode::glut_keyboard(unsigned char key, int, int)
+{
+    if (!render_instance_)
+    {
+        return;
+    }
+
+    switch (key)
+    {
+    case 27:
+        render_instance_->render_running_ = false;
+        break;
+    case 'r':
+    case 'R':
+        render_instance_->reset_simulation();
+        break;
+    default:
+        break;
+    }
+}
+
+mjtMouse MujocoMotorBridgeNode::map_button_to_action(int button, int state) const
+{
+    if (state != GLUT_DOWN)
+    {
+        return mjMOUSE_NONE;
+    }
+
+    switch (button)
+    {
+    case GLUT_LEFT_BUTTON:
+        return mjMOUSE_ROTATE_V;
+    case GLUT_RIGHT_BUTTON:
+        return mjMOUSE_ZOOM;
+    case GLUT_MIDDLE_BUTTON:
+        return mjMOUSE_MOVE_V;
+    default:
+        return mjMOUSE_NONE;
+    }
 }
 
 int main(int argc, char **argv)

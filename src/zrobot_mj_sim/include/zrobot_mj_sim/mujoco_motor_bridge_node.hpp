@@ -2,10 +2,12 @@
 #define ZROBOT_MJ_SIM__MUJOCO_MOTOR_BRIDGE_NODE_HPP_
 
 #include <array>
+#include <atomic>
 #include <cstddef>
 #include <memory>
 #include <mutex>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include "rclcpp/rclcpp.hpp"
@@ -96,6 +98,19 @@ private:
     rclcpp::Time current_sim_time_locked() const;
     SensorHandle find_sensor_handle(const std::string &name) const;
 
+    void start_render_thread();
+    void render_loop();
+    void render_scene();
+    void reset_simulation();
+
+    static void glut_display();
+    static void glut_reshape(int width, int height);
+    static void glut_mouse(int button, int state, int x, int y);
+    static void glut_motion(int x, int y);
+    static void glut_keyboard(unsigned char key, int x, int y);
+
+    mjtMouse map_button_to_action(int button, int state) const;
+
     rclcpp::Publisher<sensor_msgs::msg::JointState>::SharedPtr joint_state_pub_;
     rclcpp::Publisher<sensor_msgs::msg::Imu>::SharedPtr imu_pub_;
     rclcpp::Publisher<rosgraph_msgs::msg::Clock>::SharedPtr clock_pub_;
@@ -138,6 +153,24 @@ private:
     std::array<float, kNumMotors> last_velocities_;
     std::array<float, kNumMotors> last_efforts_;
     std::array<float, kNumMotors> target_positions_;
+
+    std::thread render_thread_;
+    std::atomic<bool> render_running_{false};
+    mjvCamera render_cam_;
+    mjvOption render_opt_;
+    mjvPerturb render_pert_;
+    mutable mjvScene render_scene_;
+    mjrContext render_context_;
+    int render_width_{1200};
+    int render_height_{900};
+    int last_mouse_x_{0};
+    int last_mouse_y_{0};
+    mjtMouse mouse_action_left_{mjMOUSE_ROTATE_V};
+    mjtMouse mouse_action_right_{mjMOUSE_ZOOM};
+    mjtMouse mouse_action_middle_{mjMOUSE_MOVE_V};
+    bool render_initialized_{false};
+
+    static MujocoMotorBridgeNode* render_instance_;
 
     mjModel *model_;
     mjData *data_;

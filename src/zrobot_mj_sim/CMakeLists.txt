@@ -27,6 +27,9 @@ if(NOT MUJOCO_INCLUDE_DIR OR NOT MUJOCO_LIBRARY)
   message(FATAL_ERROR "MuJoCo not found at ${MUJOCO_ROOT}. Download precompiled package to third_party/mujoco-3.9.0/")
 endif()
 
+find_package(GLUT REQUIRED)
+find_package(OpenGL REQUIRED)
+
 add_executable(mujoco_motor_bridge_node
   src/mujoco_motor_bridge_node.cpp
 )
@@ -50,6 +53,8 @@ get_filename_component(MUJOCO_LIBRARY_DIR "${MUJOCO_LIBRARY}" DIRECTORY)
 
 target_link_libraries(mujoco_motor_bridge_node
   ${MUJOCO_LIBRARY}
+  ${GLUT_LIBRARIES}
+  OpenGL::GL
 )
 
 target_link_options(mujoco_motor_bridge_node PRIVATE
