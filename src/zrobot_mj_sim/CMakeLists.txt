@@ -13,16 +13,18 @@ find_package(std_msgs REQUIRED)
 find_package(rosgraph_msgs REQUIRED)
 find_package(ament_index_cpp REQUIRED)
 
+set(MUJOCO_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../../thirdparty/mujoco")
+
 find_path(MUJOCO_INCLUDE_DIR mujoco/mujoco.h
-  HINTS ENV MUJOCO_ROOT
+  HINTS "${MUJOCO_ROOT}"
   PATH_SUFFIXES include)
 
 find_library(MUJOCO_LIBRARY mujoco
-  HINTS ENV MUJOCO_ROOT
+  HINTS "${MUJOCO_ROOT}"
   PATH_SUFFIXES lib lib64)
 
 if(NOT MUJOCO_INCLUDE_DIR OR NOT MUJOCO_LIBRARY)
-  message(FATAL_ERROR "MuJoCo not found. Set MUJOCO_ROOT or install MuJoCo development files.")
+  message(FATAL_ERROR "MuJoCo not found at ${MUJOCO_ROOT}. Download precompiled package to thirdparty/mujoco/")
 endif()
 
 add_executable(mujoco_motor_bridge_node

@@ -56,31 +56,23 @@ src/zrobot_mj_sim/
 
 ### 必需
 
-- **ROS 2 Humble**（或其他兼容的 ROS 2 发行版）
-- **MuJoCo 3.x+**（头文件和共享库）
+- **ROS 2 Jazzy**
+- **MuJoCo 3.x+**（预编译二进制，置于 workspace 的 `thirdparty/mujoco/`）
 
 ### 安装 MuJoCo
 
-**方法一（源码编译，推荐）**：
+从 [MuJoCo Releases](https://github.com/google-deepmind/mujoco/releases) 下载 Linux 预编译包，解压到 `thirdparty/mujoco/`：
 
 ```bash
-# 克隆 MuJoCo
-git clone https://github.com/google-deepmind/mujoco.git -b main
-cd mujoco
-mkdir build && cd build
-cmake .. -DCMAKE_INSTALL_PREFIX=/usr/local
-sudo cmake --build . --target install
+# 在 workspace 根目录执行
+mkdir -p thirdparty/mujoco
+# 下载后解压，确保目录结构为：
+# thirdparty/mujoco/
+#   include/mujoco/mujoco.h
+#   lib/libmujoco.so
 ```
 
-**方法二（预编译包）**：
-
-从 [MuJoCo Releases](https://github.com/google-deepmind/mujoco/releases) 下载 Linux 预编译包，解压后设置环境变量：
-
-```bash
-export MUJOCO_ROOT=/path/to/mujoco   # 包含 include/ 和 lib/ 的目录
-```
-
-> 构建系统通过 `MUJOCO_ROOT` 环境变量查找 MuJoCo。如果 MuJoCo 安装在 `/usr/local`，通常无需额外设置。
+> CMake 已固定查找路径为 `thirdparty/mujoco/`，无需设置环境变量。
 
 ---
 
@@ -92,12 +84,7 @@ colcon build --packages-select zrobot_mj_sim
 source install/setup.bash
 ```
 
-如果 MuJoCo 未在标准路径，先设置：
-
-```bash
-export MUJOCO_ROOT=/path/to/mujoco
-colcon build --packages-select zrobot_mj_sim
-```
+> MuJoCo 路径已固定在 `thirdparty/mujoco/`，直接构建即可。如果 MuJoCo 未下载，参考上方安装步骤。
 
 ---
 
