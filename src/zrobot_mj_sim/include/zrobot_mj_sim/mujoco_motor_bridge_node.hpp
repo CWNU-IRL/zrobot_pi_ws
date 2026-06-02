@@ -17,8 +17,7 @@
 #include "rs_interface/srv/rob_stride_msgs.hpp"
 #include "rs_interface/srv/set_zeros.hpp"
 
-struct mjModel;
-struct mjData;
+#include <mujoco/mujoco.h>
 
 class MujocoMotorBridgeNode : public rclcpp::Node
 {

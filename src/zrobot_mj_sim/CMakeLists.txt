@@ -46,8 +46,14 @@ ament_target_dependencies(mujoco_motor_bridge_node
   ament_index_cpp
 )
 
+get_filename_component(MUJOCO_LIBRARY_DIR "${MUJOCO_LIBRARY}" DIRECTORY)
+
 target_link_libraries(mujoco_motor_bridge_node
   ${MUJOCO_LIBRARY}
+)
+
+target_link_options(mujoco_motor_bridge_node PRIVATE
+  "-Wl,-rpath,${MUJOCO_LIBRARY_DIR}"
 )
 
 install(TARGETS mujoco_motor_bridge_node
