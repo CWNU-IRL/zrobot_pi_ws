@@ -293,29 +293,16 @@ void MujocoMotorBridgeNode::update_state_from_sim_locked()
             {
                 last_efforts_[i] = 0.0f;
             }
-
-            if (!is_target_initialized_)
-            {
-                target_positions_[i] = static_cast<float>(data_->qpos[handle.qpos_adr]);
-            }
         }
         else
         {
             last_positions_[i] = 0.0f;
             last_velocities_[i] = 0.0f;
             last_efforts_[i] = 0.0f;
-            if (!is_target_initialized_)
-            {
-                target_positions_[i] = 0.0f;
-            }
         }
     }
 
     has_state_ = true;
-    if (!is_target_initialized_)
-    {
-        is_target_initialized_ = true;
-    }
 }
 
 void MujocoMotorBridgeNode::apply_control_locked()
@@ -385,12 +372,15 @@ void MujocoMotorBridgeNode::control_loop()
 
     {
         std::lock_guard<std::mutex> lock(state_mutex_);
-        apply_control_locked();
-        for (size_t step = 0; step < sim_substeps_; ++step)
+        if (is_target_initialized_)
         {
-            mj_step(model_, data_);
+            apply_control_locked();
+            for (size_t step = 0; step < sim_substeps_; ++step)
+            {
+                mj_step(model_, data_);
+            }
+            update_state_from_sim_locked();
         }
-        update_state_from_sim_locked();
 
         positions = last_positions_;
         velocities = last_velocities_;
