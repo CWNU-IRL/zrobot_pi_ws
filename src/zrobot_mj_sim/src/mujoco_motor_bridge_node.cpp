@@ -751,7 +751,7 @@ void MujocoMotorBridgeNode::render_scene()
     {
         if (button == GLUT_LEFT_BUTTON)
         {
-            render_instance_->mouse_action_left_ = mjMOUSE_ROTATE_V;
+            render_instance_->mouse_action_left_ = mjMOUSE_MOVE_V;
         }
         else if (button == GLUT_RIGHT_BUTTON)
         {
@@ -759,7 +759,7 @@ void MujocoMotorBridgeNode::render_scene()
         }
         else if (button == GLUT_MIDDLE_BUTTON)
         {
-            render_instance_->mouse_action_left_ = mjMOUSE_MOVE_V;
+            render_instance_->mouse_action_left_ = mjMOUSE_ROTATE_V;
         }
     }
     else
@@ -779,6 +779,10 @@ void MujocoMotorBridgeNode::render_scene()
     double dy = static_cast<double>(render_instance_->last_mouse_y_ - y);
     render_instance_->last_mouse_x_ = x;
     render_instance_->last_mouse_y_ = y;
+
+    constexpr double kSensitivity = 0.001;
+    dx *= kSensitivity;
+    dy *= kSensitivity;
 
     {
         std::lock_guard<std::mutex> lock(render_instance_->state_mutex_);
@@ -803,6 +807,10 @@ void MujocoMotorBridgeNode::render_scene()
     case 'R':
         render_instance_->reset_simulation();
         break;
+    case 'c':
+    case 'C':
+        mjv_defaultFreeCamera(render_instance_->model_, &render_instance_->render_cam_);
+        break;
     default:
         break;
     }
@@ -818,11 +826,11 @@ mjtMouse MujocoMotorBridgeNode::map_button_to_action(int button, int state) cons
     switch (button)
     {
     case GLUT_LEFT_BUTTON:
-        return mjMOUSE_ROTATE_V;
+        return mjMOUSE_MOVE_V;
     case GLUT_RIGHT_BUTTON:
         return mjMOUSE_ZOOM;
     case GLUT_MIDDLE_BUTTON:
-        return mjMOUSE_MOVE_V;
+        return mjMOUSE_ROTATE_V;
     default:
         return mjMOUSE_NONE;
     }
