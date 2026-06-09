@@ -1,375 +1,202 @@
-# ZRobot Pi Workspace (`zrobot_pi_ws`)
+# ZRobot Pi Workspace
 
-基于 ROS 2 的 ZRobot 双足机器人控制与仿真工作空间，覆盖硬件驱动层（CAN 电机、IMU）到上层运动控制（FSM + 强化学习推理），并提供 Gazebo 仿真支持。
+基于 ROS 2 的 zrobot 双足机器人控制与仿真工作空间，覆盖硬件驱动（CAN 电机、IMU 传感器）到上层运动控制（有限状态机 + 强化学习推理），并提供 Gazebo 和 MuJoCo 双仿真环境。所有控制节点暴露统一 ROS 2 服务接口，实现实机与仿真间的无缝切换。
 
-## 目录结构
+## 依赖
+
+### 系统库
+
+```bash
+sudo apt install -y libserial-dev can-utils libeigen3-dev freeglut3-dev
+```
+
+### ROS 2
+
+推荐 ROS 2 **Jazzy**（Ubuntu 24.04）或 **Humble**（Ubuntu 22.04）。
+
+**基础依赖**（ROS 2 desktop 通常已包含）：
+`rclcpp`、`sensor_msgs`、`std_msgs`、`geometry_msgs`、`rosgraph_msgs`、`tf2`、`rosidl_default_generators`、`ament_index_cpp`
+
+**仿真额外依赖**：
+
+```bash
+# Jazzy
+sudo apt install ros-jazzy-ros-gz-sim ros-jazzy-ros-gz-bridge ros-jazzy-gz-ros2-control ros-jazzy-ros2controllers
+
+# Humble
+sudo apt install ros-humble-ros-gz-sim ros-humble-ros-gz-bridge ros-humble-gz-ros2-control ros-humble-ros2controllers
+```
+
+### 预编译第三方库
+
+手动下载并放置于 `third_party/` 目录：
+
+| 库 | 架构 | 版本 | 用途 |
+|---|------|------|------|
+| MuJoCo | 同系统 | 3.9.0 | MuJoCo 仿真引擎 |
+| ONNX Runtime | aarch64 + x64 | 1.16.3 | Locomotion FSM 推理引擎 |
+| LibTorch | x86_64 (third_party) / aarch64 (系统 Python) | 2.12 | PTLocomotion FSM 推理引擎 |
+
+## 构建
+
+```bash
+# 构建所有包
+colcon build --symlink-install
+
+# 或按层级构建
+colcon build --packages-select rs_interface imu_msg              # 接口层
+colcon build --packages-select zrobot_bridge imu_data_node       # 驱动层
+colcon build --packages-select zrobot_deploy                     # 控制层
+colcon build --packages-select zrobot_gz_sim                     # Gazebo 仿真
+colcon build --packages-select zrobot_mj_sim                     # MuJoCo 仿真
+
+source install/setup.bash
+```
+
+## 使用
+
+### 实机部署
+
+```bash
+# 1. 配置 CAN 接口（需 4 路：can10~can13）
+sudo bash src/zrobot_bridge/scripts/setup_can_interfaces.sh
+
+# 2. 启动电机 CAN 桥接
+ros2 launch zrobot_bridge motor_controller.launch.py
+
+# 3. （可选）启动 IMU 节点
+ros2 run imu_data_node imu_data_node
+
+# 4. 启动运动控制器
+ros2 run zrobot_deploy main
+```
+
+### Gazebo 仿真
+
+```bash
+ros2 launch zrobot_gz_sim sim_bringup.launch.py
+
+# 另一终端
+source install/setup.bash
+ros2 run zrobot_deploy main
+```
+
+### MuJoCo 仿真
+
+```bash
+ros2 launch zrobot_mj_sim mujoco_bringup.launch.py
+
+# 另一终端
+source install/setup.bash
+ros2 run zrobot_deploy main
+```
+
+### 键盘控制（zrobot_deploy）
+
+| 按键 | 模式 | 说明 |
+|------|------|------|
+| `F` | FixStand | 3 秒线性插值到机械零位并保持站立 |
+| `L` | Locomotion | ONNX Runtime 推理运动（需 IMU 数据） |
+| `T` | PTLocomotion | LibTorch 推理运动（需 IMU 数据） |
+| `D` | Damping | 软件阻尼模式 |
+| `S` | Stop | 停止当前状态机（Damping 停止时自动切换到 FixStand） |
+| `Q` | Quit | 退出程序 |
+
+MuJoCo 渲染窗口额外支持：`ESC` 退出，`r` 重置仿真，`c` 重置相机。
+
+## 项目结构
 
 ```
 zrobot_pi_ws/
 ├── src/                          # ROS 2 包源码
-│   ├── rs_interface/             # 自定义服务接口 (srv)
-│   ├── imu_msg/                  # 自定义 IMU 消息 (msg)
-│   ├── imu_data_node/            # WIT 系列 IMU 驱动节点
-│   ├── zrobot_bridge/            # RobStride 电机 CAN 总线控制桥接
-│   ├── zrobot_gz_sim/            # Gazebo 仿真（URDF + ros2_control 桥接）
-│   ├── zrobot_control/           # 电机控制客户端示例节点
-│   └── zrobot_deploy/            # 运动控制部署（FSM + RL 推理）
-├── scripts/                      # 工具脚本
-│   └── pt2onnx.py                # TorchScript → ONNX 模型转换
+│   ├── [`imu_msg/`](src/imu_msg/README.md)                  # 自定义 IMU 消息（ImuData.msg）
+│   ├── [`rs_interface/`](src/rs_interface/README.md)        # 自定义电机控制服务（3 个 srv）
+│   ├── [`imu_data_node/`](src/imu_data_node/README.md)      # WIT 系列 IMU 串口驱动（TTL/CAN/RS485）
+│   ├── [`zrobot_bridge/`](src/zrobot_bridge/README.md)      # RobStride 电机 CAN 总线桥接（实机）
+│   ├── [`zrobot_control/`](src/zrobot_control/README.md)    # 电机控制测试客户端
+│   ├── [`zrobot_deploy/`](src/zrobot_deploy/README.md)      # FSM 运动控制 + RL 推理部署
+│   ├── [`zrobot_gz_sim/`](src/zrobot_gz_sim/README.md)      # Gazebo 仿真桥接
+│   └── [`zrobot_mj_sim/`](src/zrobot_mj_sim/README.md)      # MuJoCo 仿真桥接
+├── resources/
+│   └── policy/                   # RL 策略模型（.onnx, .pt，gitignored）
+├── scripts/
+│   └── pt2onnx.py                # TorchScript → ONNX 模型转换与验证
 ├── third_party/                  # 预编译第三方库
-│   ├── onnxruntime-linux-aarch64-1.16.3/   # ONNX Runtime (ARM64)
-│   ├── onnxruntime-linux-aarch64-1.16.3.tgz
-│   ├── libtorch/                            # LibTorch (x86_64)
-│   └── libtorch-shared-with-deps-2.11.0+cu126.zip
-├── install/                      # colcon 构建产出（含所有包）
+│   ├── mujoco-3.9.0/
+│   ├── onnxruntime-linux-{aarch64,x64}-1.16.3/
+│   └── libtorch/
 ├── build/                        # colcon 构建中间文件
-├── log/                          # 构建日志
-└── README.md                     # 本文件
+├── install/                      # colcon 产出
+└── log/                          # 构建日志
 ```
-
-## ROS 2 包总览
-
-| 包名 | 类型 | 描述 |
-|------|------|------|
-| `rs_interface` | 接口 (srv) | 定义 3 个电机控制服务接口 |
-| `imu_msg` | 接口 (msg) | 定义自定义 IMU 消息（含欧拉角） |
-| `imu_data_node` | 驱动 | WIT 系列 IMU 数据采集（TTL/CAN/RS485） |
-| `zrobot_bridge` | 驱动 | RobStride 电机 CAN 总线通信桥接 |
-| `zrobot_gz_sim` | 仿真 | Gazebo 仿真环境 + 服务桥接 |
-| `zrobot_control` | 示例 | 电机控制客户端示例 |
-| `zrobot_deploy` | 控制 | FSM 运动控制系统 + RL 推理 |
 
 ### 包依赖关系
 
 ```
-rs_interface  ◄── (srv 依赖) ──  zrobot_bridge, zrobot_gz_sim,
-                                  zrobot_control, zrobot_deploy
+rs_interface ────┬── zrobot_bridge    （实机 CAN 驱动）
+                 ├── zrobot_gz_sim    （Gazebo 仿真桥接）
+                 ├── zrobot_mj_sim    （MuJoCo 仿真桥接）
+                 ├── zrobot_control   （测试客户端）
+                 └── zrobot_deploy    （FSM 运动控制器）
 
-imu_msg       ◄── (msg 依赖) ──  imu_data_node
+imu_msg ────────── imu_data_node      （IMU 驱动节点）
 ```
 
----
+### 包速览
 
-## 各包详情
+| 包名 | 类型 | 说明 |
+|------|------|------|
+| [`imu_msg`](src/imu_msg/README.md) | 接口（msg） | `ImuData` 消息：标准 IMU + 欧拉角扩展 |
+| [`rs_interface`](src/rs_interface/README.md) | 接口（srv） | 3 个电机控制服务定义 |
+| [`imu_data_node`](src/imu_data_node/README.md) | 驱动 | WIT 系列 IMU 数据采集，50Hz 双话题发布 |
+| [`zrobot_bridge`](src/zrobot_bridge/README.md) | 驱动 | CAN 总线控制 23 个 RobStride 电机，4 路 CAN |
+| [`zrobot_control`](src/zrobot_control/README.md) | 工具 | 每 5s 递增位置的服务调用示例节点 |
+| [`zrobot_deploy`](src/zrobot_deploy/README.md) | 控制 | FSM 系统：FixStand / Locomotion / PTLocomotion / Damping |
+| [`zrobot_gz_sim`](src/zrobot_gz_sim/README.md) | 仿真 | Gazebo + ros2_control + PD 力矩桥接 |
+| [`zrobot_mj_sim`](src/zrobot_mj_sim/README.md) | 仿真 | MuJoCo + GLUT 渲染 + 力矩/位置双控制模式 |
 
-### 1. `rs_interface` — 电机控制服务接口
+## 重要技术细节
 
-定义 3 个自定义 ROS 2 服务，作为硬件层与上层控制的统一接口。
+### 统一服务接口
+
+`zrobot_bridge`（实机）、`zrobot_gz_sim`、`zrobot_mj_sim` 三个包均提供相同的三个 ROS 2 服务：
 
 | 服务 | 请求 | 响应 |
 |------|------|------|
-| `RobStrideMsgs` | `float32[23] positions` — 23 个电机目标位置 (rad) | `float32[23] feedback_positions/velocities/torques/temperatures` + `bool success` + `string message` |
-| `SetZeros` | 无 | `bool success` + `string message` |
-| `GetPositions` | 无 | `float32[23] feedback_positions` + `bool success` + `string message` |
+| `/rob_stride_control` | `float32[23] positions` | `feedback_positions/velocities/torques/temperatures` + `success` + `message` |
+| `/get_positions` | （空） | `float32[23] feedback_positions` + `success` + `message` |
+| `/set_zeros` | （空） | `success` + `message` |
 
-**依赖**: `rosidl_default_generators`
+控制层（`zrobot_deploy`）通过服务名调用，无需关心底层是实机还是仿真。
 
----
+### 23 电机与 12 驱动关节
 
-### 2. `imu_msg` — 自定义 IMU 消息
+机器人总定义 23 个关节，其中 12 个腿部关节（左右各 6：hip_roll/yaw/pitch + knee + foot_pitch/roll）由电机驱动。上肢关节在实机中有电机但在仿真中固定。每个包通过 `active_joint_count_` 处理此差异，未连接的关节索引被跳过。
 
-| 消息 | 字段 |
-|------|------|
-| `ImuData` | `std_msgs/Header header` + `sensor_msgs/Imu imu` + `float64 roll/pitch/yaw` (rad) |
+### 控制模式
 
-**依赖**: `std_msgs`, `sensor_msgs`, `geometry_msgs`, `rosidl_default_generators`
+MuJoCo 仿真支持两种模式：
 
----
+| 模式 | 原理 | 模型文件 |
+|------|------|---------|
+| `torque_pd`（默认） | C++ PD 公式计算力矩，写入 `<motor>` 执行器 | `zrobot.xml` |
+| `position` | 直接写目标位置，MuJoCo 内置 `<position>` 伺服 | `zrobot_position.xml` |
 
-### 3. `imu_data_node` — IMU 数据采集驱动
+PD 公式：`tau = (target_q - current_q) * kp + (0 - current_dq) * kd`
 
-基于 C++ 实现的 WIT 系列 IMU 采集节点。支持 **TTL**（11 字节数据包）、**CAN**（8 字节数据包）、**RS485**（Modbus RTU 轮询）三种协议。
+### RL 推理
 
-**发布话题**:
+Locomotion 和 PTLocomotion 使用相同的 47 维观测空间和 12 维动作空间：
 
-| 话题 | 类型 | 频率 | 内容 |
-|------|------|------|------|
-| `/imu/data` | `sensor_msgs/Imu` | ~200 Hz | 加速度 (m/s²)、角速度 (rad/s)、四元数 |
-| `/imu/ImuDataWithRPY` | `imu_msg/ImuData` | ~200 Hz | 上述 + roll/pitch/yaw (rad) |
+- 观测：步态相位 (2) + 指令速度 (3) + 关节位置 (12) + 关节速度 (12) + 前一步动作 (12) + IMU 角速度 (3) + IMU 欧拉角 (3)
+- 动作：12 个腿部关节的位置增量，通过 `dof_indices_` 映射到 23 电机数组
+- 控制频率：100 Hz
+- 推理在独立线程运行，不阻塞主循环
 
-**系统依赖**: `libserial-dev` (`sudo apt install libserial-dev`)
+### 模型转换
 
-**运行**:
-```bash
-ros2 run imu_data_node imu_data_node
-```
-
-默认使用 `/dev/imu_usb`、2000000 波特率、TTL 协议。修改协议见源码 `main()` 函数。
-
----
-
-### 4. `zrobot_bridge` — RobStride 电机 CAN 控制桥接
-
-核心电机驱动节点，通过 **CAN 总线** 与最多 23 个 RobStride 电机直接通信，实现完整底层协议（运控模式、位置模式、零位设置、参数读写等）。
-
-**提供的服务**:
-
-| 服务名 | 类型 |
-|--------|------|
-| `/motor_controller_node/rob_stride_control` | `rs_interface/RobStrideMsgs` |
-| `/motor_controller_node/set_zeros` | `rs_interface/SetZeros` |
-| `/motor_controller_node/get_positions` | `rs_interface/GetPositions` |
-
-**支持的电机型号**:
-
-| 类型值 | 型号 | 最大角度 | 最大速度 | 最大扭矩 |
-|--------|------|---------|---------|---------|
-| 0 | ROBSTRIDE_00 | 4π rad | 50 rad/s | 17 Nm |
-| 1 | ROBSTRIDE_01 | 4π rad | 44 rad/s | 17 Nm |
-| 2 | ROBSTRIDE_02 | 4π rad | 44 rad/s | 17 Nm |
-| 3 | ROBSTRIDE_03 | 4π rad | 50 rad/s | 60 Nm |
-| 4 | ROBSTRIDE_04 | 4π rad | 15 rad/s | 120 Nm |
-| 5 | ROBSTRIDE_05 | 4π rad | 33 rad/s | 17 Nm |
-| 6 | ROBSTRIDE_06 | 4π rad | 20 rad/s | 60 Nm |
-
-**配置文件**: `config/motor_config.yaml` — 配置主机 ID、23 个电机的 CAN ID、电机类型、CAN 接口、KP/KD 参数。
-
-**运行**:
-```bash
-# 启动 CAN 接口
-sudo bash src/zrobot_bridge/scripts/setup_can_interfaces.sh 1000000
-
-# 启动电机控制节点
-ros2 launch zrobot_bridge motor_controller.launch.py
-```
-
----
-
-### 5. `zrobot_gz_sim` — Gazebo 仿真包
-
-使用 **23 关节 URDF** + **ros2_control** 构建的 Gazebo 仿真环境。通过 `gazebo_motor_bridge_node` 提供与真实硬件完全相同的 3 个服务接口，使上层控制程序无需修改即可在仿真与实物之间切换。
-
-**核心特性**:
-- 23 个 revolute 关节 + IMU 传感器
-- `joint_state_broadcaster` + `forward_command_controller` 组成的 ros2_control 架构
-- `ros_gz_bridge` 桥接仿真时钟 (`/clock`) 和 IMU 数据 (`/imu/data`)
-- `gazebo_motor_bridge_node` 接收服务请求并转换为关节力矩命令（PD 控制）
-
-**配置文件**:
-- `config/controllers.yaml` — ros2_control 控制器参数
-- `config/bridge_params.yaml` — 关节名称、KP/KD、反馈温度
-
-**资源**:
-- `resources/zrobot/urdf/zrobot.urdf` — 机器人 URDF 模型
-- `resources/zrobot/meshes/` — 3D 网格文件
-- `resources/zrobot/mjcf/` — MuJoCo 模型（可选）
-- `worlds/empty.sdf` — 仿真世界
-
-**运行**:
-```bash
-ros2 launch zrobot_gz_sim sim_bringup.launch.py
-```
-
-**验证服务**:
-```bash
-ros2 service list | grep -E 'rob_stride_control|get_positions|set_zeros'
-```
-
----
-
-### 6. `zrobot_deploy` — 运动控制部署
-
-基于 **有限状态机 (FSM)** 的运动控制系统，支持键盘交互切换多种控制模式。
-
-**FSM 模式**:
-
-| 按键 | 模式 | 描述 |
-|------|------|------|
-| `F` | FixStand | 缓慢移动至机械零位并保持（3 秒线性插值） |
-| `L` | Locomotion | ONNX 推理强化学习运动控制（47 维观测 → 12 维动作） |
-| `T` | PTLocomotion | TorchScript (.pt) 推理强化学习运动控制 |
-| `D` | Damping | 仿真阻尼模式（通过位置指令近似阻尼） |
-| `S` | Stop | 停止当前状态机 |
-| `Q` | Quit | 退出程序 |
-
-**架构**:
-
-```
-FSM (基类)
-├── FixStand        // 机械零位站立
-├── Locomotion      // ONNX RL 推理行走
-├── PTLocomotion    // TorchScript RL 推理行走
-└── Damping         // 仿真阻尼
-```
-
-**RL 模型规格**:
-- 观测维度: 47 (单帧) × N (历史帧堆叠) = 模型输入
-- 动作维度: 12（映射到 23 个电机中的 12 个主动自由度）
-- 控制频率: 50–100 Hz（可配置）
-
-**依赖**: `rclcpp`, `rs_interface`, `Eigen3`, `LibTorch` (仅 PTLocomotion), `ONNX Runtime` (仅 Locomotion), `tf2`
-
-**运行**:
-```bash
-ros2 run zrobot_deploy main
-```
-
----
-
-### 7. `zrobot_control` — 示例客户端
-
-简单的电机控制客户端，演示如何通过 `RobStrideMsgs` 服务控制电机。每 5 秒发送一次请求，每次将反馈位置 +1 作为新目标位置。
-
-**运行**:
-```bash
-ros2 run zrobot_control rob_stride_client_node
-```
-
----
-
-## 系统依赖
-
-### ROS 2
-
-- **推荐**: ROS 2 Humble (Ubuntu 22.04) 或 Jazzy (Ubuntu 24.04)
-- 必需包: `rclcpp`, `sensor_msgs`, `std_msgs`, `geometry_msgs`, `rosidl_default_generators`
-- 仿真额外: `ros-gz-sim`, `ros-gz-bridge`, `gz-ros2-control`, `controller-manager`, `robot-state-publisher`, `xacro`, `ros2-controllers`
-
-### 系统包
+`scripts/pt2onnx.py` 将 TorchScript（`.pt`）模型转换为 ONNX（`.onnx`），包含结构校验、ONNX Runtime 推理测试、以及 TorchScript 与 ONNX 输出的数值误差对比：
 
 ```bash
-sudo apt install -y \
-    libserial-dev \
-    can-utils \
-    libeigen3-dev
+python3 scripts/pt2onnx.py --jit_model policy_1.pt --onnx_model policy.onnx --obs_dim 47
 ```
-
-### 第三方库 (预编译于 `third_party/`)
-
-| 库 | 架构 | 版本 | 用途 |
-|----|------|------|------|
-| ONNX Runtime | aarch64 | 1.16.3 | Locomotion RL 推理 |
-| LibTorch | x86_64 | 2.11.0+cu126 | PTLocomotion RL 推理 |
-
-> 在 ARM64 (Jetson/树莓派) 平台上，LibTorch 自动从系统 Python (`~/.local/lib/python3.10/site-packages/torch`) 加载。
-
----
-
-## 构建
-
-### 1. 安装 ROS 2 依赖
-
-```bash
-cd /home/c112/Codes/zrobot_pi_ws
-rosdep install --from-paths src --ignore-src -r -y
-```
-
-### 2. 构建全部包
-
-```bash
-colcon build --symlink-install
-```
-
-### 3. 按需构建
-
-```bash
-# 仅构建接口包
-colcon build --packages-select rs_interface imu_msg
-
-# 构建驱动层
-colcon build --packages-select zrobot_bridge imu_data_node
-
-# 构建控制层
-colcon build --packages-select zrobot_deploy
-
-# 构建仿真
-colcon build --packages-select zrobot_gz_sim
-```
-
-### 4. 加载环境
-
-```bash
-source install/setup.bash
-```
-
----
-
-## 使用流程
-
-### 实物部署
-
-```bash
-# 1. 配置 CAN 接口
-sudo bash src/zrobot_bridge/scripts/setup_can_interfaces.sh 1000000
-
-# 2. 启动环境
-source install/setup.bash
-
-# 3. 启动电机桥接
-ros2 launch zrobot_bridge motor_controller.launch.py
-
-# 4. (可选) 启动 IMU
-ros2 run imu_data_node imu_data_node
-
-# 5. 启动运动控制
-ros2 run zrobot_deploy main
-# 按 F 进入站立，按 L 开始行走
-```
-
-### 仿真
-
-```bash
-source install/setup.bash
-ros2 launch zrobot_gz_sim sim_bringup.launch.py
-
-# 另开终端，运行控制
-source install/setup.bash
-ros2 run zrobot_deploy main
-# 按 D 进入阻尼模式（仿真推荐），按 F 站立
-```
-
----
-
-## 模型转换
-
-`scripts/pt2onnx.py` 用于将 PyTorch JIT 模型 (`.pt`) 转换为 ONNX (`.onnx`)，并自动验证输出一致性。
-
-```bash
-python3 scripts/pt2onnx.py \
-    --jit_model policy_1.pt \
-    --onnx_model policy_1.onnx \
-    --obs_dim 47 \
-    --opset 13
-```
-
----
-
-## 常见问题
-
-### CAN 接口未就绪
-```bash
-# 检查 CAN 接口
-ip link show | grep can
-# 手动启用
-sudo ip link set can0 up type can bitrate 1000000
-```
-
-### 串口权限不足 (IMU)
-```bash
-sudo usermod -a -G dialout $USER
-# 或临时赋权
-sudo chmod 666 /dev/ttyUSB0
-```
-
-### Gazebo 仿真缺少依赖
-```bash
-# Humble
-sudo apt install ros-humble-ros-gz-sim ros-humble-ros-gz-bridge ros-humble-gz-ros2-control
-
-# Jazzy
-sudo apt install ros-jazzy-ros-gz-sim ros-jazzy-ros-gz-bridge ros-jazzy-gz-ros2-control
-```
-
-### 控制器管理器未找到 (仿真)
-仿真启动脚本会自动检测 `controller_manager`，若缺失则禁用控制器 spawner 并打印警告，不影响核心功能。
-
----
-
-## 许可证
-
-- `rs_interface`, `zrobot_bridge`, `zrobot_gz_sim`, `zrobot_control`, `imu_data_node`: Apache-2.0
-- `imu_msg`, `zrobot_deploy`: 待声明
-
-## 维护者
-
-root <callmebill@billw.cn>
