@@ -1,271 +1,168 @@
 # zrobot_mj_sim
 
-基于 MuJoCo 的 zrobot 双足机器人仿真桥接包。提供与实物驱动包 `zrobot_bridge` **完全相同的 ROS 2 服务接口**（`/rob_stride_control`、`/get_positions`、`/set_zeros`），同时发布 `/joint_states` 与 `/imu/data` 仿真数据，可直接对接 `zrobot_deploy` 状态机进行运动控制算法的仿真验证。
+## 概述
 
----
-
-## 目录结构
-
-```
-src/zrobot_mj_sim/
-├── CMakeLists.txt                    # 构建配置（自动查找 MuJoCo）
-├── package.xml                       # 包依赖声明
-├── README.md                         # 本文件
-├── config/
-│   └── mujoco_bridge_params.yaml     # 默认参数配置
-├── launch/
-│   └── mujoco_bringup.launch.py      # 启动文件
-├── include/zrobot_mj_sim/
-│   └── mujoco_motor_bridge_node.hpp  # 节点头文件
-├── src/
-│   └── mujoco_motor_bridge_node.cpp  # 节点实现
-└── resources/zrobot/
-    ├── mjcf/
-    │   ├── zrobot.xml                # 力矩模式 MJCF（<motor> actuator）
-    │   └── zrobot_position.xml       # 位置模式 MJCF（<position> actuator）
-    └── meshes/                       # 机器人 mesh 文件（STL）
-        ├── base_link.STL
-        ├── L_hip_roll_link.STL
-        └── ...
-```
-
----
-
-## 功能
-
-| 类别 | 名称 | 说明 |
-|------|------|------|
-| 服务 | `/rob_stride_control` | 接收 23 维位置指令，返回位置/速度/力矩/温度反馈 |
-| 服务 | `/get_positions` | 获取当前 23 个关节位置 |
-| 服务 | `/set_zeros` | 将当前关节位置设为零点偏移 |
-| 话题 | `/joint_states` | 传感器_msgs/JointState，200 Hz 发布 |
-| 话题 | `/imu/data` | 传感器_msgs/Imu，含姿态四元数、角速度、线加速度 |
-| 话题 | `/clock` | 可选，发布 MuJoCo 内部仿真时间 |
-
-### 控制模式
-
-**torque_pd 模式（默认）**：在应用层计算 PD 力矩 $`\tau = K_p(q_{des} - q) + K_d(0 - \dot{q})`$，通过 MuJoCo `<motor>` 执行器施加于关节。与 `zrobot_gz_sim` 的 `gazebo_motor_bridge_node` 行为一致。
-
-**position 模式**：将目标位置直接写入 `mjData->ctrl`，使用 MuJoCo 内置 `<position>` 执行器完成伺服控制；MJCF 使用 `zrobot_position.xml`，各关节设定了适当的 `kp`/`kv` 参数和限位范围。
-
-> 两种模式均可通过参数 `control_mode` 切换到。`zrobot_deploy` 的 `FSM::sendMotorPositions()` 无需任何修改即可对接。
-
----
+zrobot 双足机器人的 MuJoCo 仿真桥接包。`MujocoMotorBridgeNode` 加载 MJCF 模型文件，运行物理仿真，并通过 ROS 2 服务接口暴露与实机 `zrobot_bridge` 完全一致的控制方式。支持力矩控制（默认，用户空间 PD）和位置控制（MuJoCo 内置位置伺服）两种模式。包含 GLUT 渲染窗口用于可视化。
 
 ## 依赖
 
-### 必需
+### 系统依赖
+- MuJoCo 3.9.0（从 `../../third_party/mujoco-3.9.0/` 获取）
+- GLUT、OpenGL
 
-- **ROS 2 Jazzy**
-- **MuJoCo 3.x+**（预编译二进制，置于 workspace 的 `thirdparty/mujoco/`）
-
-### 安装 MuJoCo
-
-从 [MuJoCo Releases](https://github.com/google-deepmind/mujoco/releases) 下载 Linux 预编译包，解压到 `thirdparty/mujoco/`：
-
-```bash
-# 在 workspace 根目录执行
-mkdir -p thirdparty/mujoco
-# 下载后解压，确保目录结构为：
-# thirdparty/mujoco/
-#   include/mujoco/mujoco.h
-#   lib/libmujoco.so
-```
-
-> CMake 已固定查找路径为 `thirdparty/mujoco/`，无需设置环境变量。
-
----
+### ROS 2
+- `rclcpp`
+- `sensor_msgs`
+- `std_msgs`
+- `rosgraph_msgs`
+- `ament_index_cpp`
+- `rs_interface`（自定义服务定义包）
 
 ## 构建
 
 ```bash
-cd /home/c112/Codes/zrobot_pi_ws
-colcon build --packages-select zrobot_mj_sim
-source install/setup.bash
+colcon build --packages-select rs_interface zrobot_mj_sim
 ```
 
-> MuJoCo 路径已固定在 `thirdparty/mujoco/`，直接构建即可。如果 MuJoCo 未下载，参考上方安装步骤。
-
----
-
-## 启动
-
-### 启动仿真桥接节点
+## 使用
 
 ```bash
+# 使用仿真时间启动
 ros2 launch zrobot_mj_sim mujoco_bringup.launch.py
+
+# 不使用仿真时间
+ros2 launch zrobot_mj_sim mujoco_bringup.launch.py use_sim_time:=false
 ```
 
-### 直接运行节点（可临时覆盖参数）
+启动后：
+1. 加载 MJCF 模型，机器人从 0.8m 高度自由落体到地面
+2. GLUT 窗口显示仿真画面（1200×900）
+3. `/rob_stride_control` 等服务就绪
+
+### 测试控制
 
 ```bash
-# 使用默认参数（torque_pd 模式）
-ros2 run zrobot_mj_sim mujoco_motor_bridge_node
-
-# 切换到位置控制模式
-ros2 run zrobot_mj_sim mujoco_motor_bridge_node --ros-args -p control_mode:=position
-
-# 指定自定义 MJCF 并降低控制频率
-ros2 run zrobot_mj_sim mujoco_motor_bridge_node \
-  --ros-args -p model_path:=/path/to/custom_model.xml \
-             -p control_frequency:=100.0
+# 发送站立指令
+ros2 service call /rob_stride_control rs_interface/srv/RobStrideMsgs \
+  "{positions: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]}"
 ```
 
----
+结合 `zrobot_deploy` 运行完整运动控制：
 
-## 参数说明
+```bash
+# 终端 1：仿真
+ros2 launch zrobot_mj_sim mujoco_bringup.launch.py
+
+# 终端 2：FSM 控制器
+ros2 run zrobot_deploy main
+```
+
+### 渲染窗口快捷键
+
+| 按键 | 功能 |
+|------|------|
+| ESC | 退出仿真 |
+| `r` | 重置仿真 |
+| `c` | 重置相机视角 |
+
+鼠标左键拖拽旋转视野，滚轮缩放，中键平移。
+
+## ROS 2 接口
+
+### 提供的服务
+
+| 服务名 | 类型 | 说明 |
+|--------|------|------|
+| `/rob_stride_control` | `rs_interface/srv/RobStrideMsgs` | 发送 23 关节位置命令，返回完整反馈 |
+| `/get_positions` | `rs_interface/srv/GetPositions` | 读取当前关节位置 |
+| `/set_zeros` | `rs_interface/srv/SetZeros` | 设置零位偏移 |
+
+### 发布的话题
+
+| 话题名 | 类型 | 频率 | 说明 |
+|--------|------|------|------|
+| `/joint_states` | `sensor_msgs/msg/JointState` | 200 Hz | 关节位置/速度/力矩 |
+| `/imu/data` | `sensor_msgs/msg/Imu` | 200 Hz | 机身 IMU（四元数、角速度、线加速度） |
+| `/clock` | `rosgraph_msgs/msg/Clock` | 200 Hz | 仿真时间（支持 `use_sim_time`） |
+
+### 节点参数
 
 | 参数名 | 类型 | 默认值 | 说明 |
 |--------|------|--------|------|
-| `joint_names` | string[] | 12 个腿部关节 | 活跃关节名称列表，顺序对应服务数组索引 |
-| `kp` | double[] | 见 yaml | 关节 PD 比例增益，torque_pd 模式使用 |
-| `kd` | double[] | 见 yaml | 关节 PD 微分增益，torque_pd 模式使用 |
-| `control_mode` | string | `"torque_pd"` | 控制模式：`"torque_pd"` 或 `"position"` |
-| `control_frequency` | double | 200.0 | 控制循环频率（Hz），决定仿真步进批次大小 |
-| `feedback_temperature` | double | 35.0 | 反馈温度值（模拟真实电机温度） |
-| `publish_joint_states` | bool | true | 是否发布 `/joint_states` |
-| `publish_imu` | bool | true | 是否发布 `/imu/data` |
-| `publish_clock` | bool | true | 是否发布 `/clock` |
-| `base_frame` | string | `"base_link"` | 关节状态消息的 frame_id |
-| `imu_frame` | string | `"imu"` | IMU 消息的 frame_id |
-| `model_path` | string | `""` | 力矩模式 MJCF 路径；为空时自动加载 `resources/zrobot/mjcf/zrobot.xml` |
-| `position_model_path` | string | `""` | position 模式 MJCF 路径；为空且 model_path 为空时自动加载 `resources/zrobot/mjcf/zrobot_position.xml` |
+| `joint_names` | string[] | 23 个默认名 | 关节名称列表（前 12 个为驱动关节） |
+| `kp` | double[] | 40.0 | 各关节 PD 比例增益 |
+| `kd` | double[] | 1.0 | 各关节 PD 微分增益 |
+| `control_mode` | string | "torque_pd" | 控制模式：`torque_pd` 或 `position` |
+| `control_frequency` | double | 200.0 | 控制循环频率（Hz） |
+| `sim_substeps` | int | 8 | 每步 `mj_step()` 迭代次数 |
+| `feedback_temperature` | double | 35.0 | 模拟电机温度反馈 |
 
----
+## 项目结构
 
-## API 参考
-
-### 服务
-
-#### /rob_stride_control
-
-**请求**：
-
-| 字段 | 类型 | 说明 |
-|------|------|------|
-| `positions` | float32[23] | 23 个关节的目标位置（弧度） |
-
-**响应**：
-
-| 字段 | 类型 | 说明 |
-|------|------|------|
-| `feedback_positions` | float32[23] | 当前关节位置 |
-| `feedback_velocities` | float32[23] | 当前关节速度 |
-| `feedback_torques` | float32[23] | 当前关节力矩 |
-| `feedback_temperatures` | float32[23] | 当前关节温度（固定 35.0°） |
-| `success` | bool | 是否成功 |
-| `message` | string | 状态信息 |
-
-#### /get_positions
-
-**请求**：空
-
-**响应**：
-
-| 字段 | 类型 | 说明 |
-|------|------|------|
-| `feedback_positions` | float32[23] | 23 个关节当前弧度位置 |
-| `success` | bool | 是否成功 |
-| `message` | string | 状态信息 |
-
-#### /set_zeros
-
-**请求**：空
-
-**响应**：
-
-| 字段 | 类型 | 说明 |
-|------|------|------|
-| `success` | bool | 是否成功 |
-| `message` | string | 状态信息 |
-
-### 话题
-
-| 话题 | 类型 | 频率 | 说明 |
-|------|------|------|------|
-| `/joint_states` | sensor_msgs/JointState | control_frequency | 关节名称、位置、速度、力矩 |
-| `/imu/data` | sensor_msgs/Imu | control_frequency | 四元数方向、角速度、线加速度 |
-| `/clock` | rosgraph_msgs/Clock | control_frequency | MuJoCo 内部仿真时间，支持 use_sim_time |
-
----
-
-## 使用示例
-
-### 查询关节位置
-
-```bash
-ros2 service call /get_positions rs_interface/srv/GetPositions
+```
+zrobot_mj_sim/
+├── CMakeLists.txt
+├── package.xml
+├── config/
+│   └── mujoco_bridge_params.yaml    # 默认参数配置
+├── include/zrobot_mj_sim/
+│   └── mujoco_motor_bridge_node.hpp
+├── launch/
+│   └── mujoco_bringup.launch.py     # 启动文件
+├── resources/zrobot/
+│   ├── mjcf/
+│   │   ├── zrobot.xml               # 力矩模式模型（<motor> 执行器）
+│   │   └── zrobot_position.xml      # 位置模式模型（<position> 执行器）
+│   └── meshes/
+│       ├── *.STL                    # 22 个 STL 网格文件
+│       └── zrobot.urdf              # 原始 SolidWorks 导出 URDF
+└── src/
+    └── mujoco_motor_bridge_node.cpp # 完整实现（854 行）
 ```
 
-### 发送位置指令
+## 技术细节
 
-```bash
-# 向所有 23 个关节发送零位（需补齐 23 个值）
-ros2 service call /rob_stride_control rs_interface/srv/RobStrideMsgs \
-  "{positions: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]}"
+### 控制模式
+
+| 模式 | MJCF 执行器类型 | 控制方式 | 默认激活 |
+|------|---------------|---------|---------|
+| `torque_pd` | `<motor>` | C++ PD 计算力矩写入 `data_->ctrl` | 是 |
+| `position` | `<position>` | 直接写入目标位置，MuJoCo 内置伺服 | 否 |
+
+**力矩 PD 公式**：
+```
+tau = (target_q - current_q) * kp + (0 - current_dq) * kd
+data_->ctrl[actuator_id] = tau
 ```
 
-### 设置零点
+### 仿真循环
 
-```bash
-ros2 service call /set_zeros rs_interface/srv/SetZeros
+由 ROS 2 定时器驱动，每次触发执行：
+
+```
+1. apply_control_locked()   # 将目标位置→PD 力矩写入 data_->ctrl
+2. mj_step() × sim_substeps_ # 推进物理仿真
+3. update_state_from_sim_locked()  # 读取关节/IMU 状态
+4. 发布 /joint_states, /imu/data, /clock
 ```
 
-### 查看仿真输出
+### 关节映射
 
-```bash
-# 查看关节状态
-ros2 topic echo /joint_states
+使用 `mj_name2id()` 将 ROS 关节名称映射到 MuJoCo 的 `qpos`、`dof`、`actuator` 索引：
 
-# 查看 IMU 数据
-ros2 topic echo /imu/data
-
-# 查看仿真时间
-ros2 topic echo /clock
+```
+关节名 → mj_name2id(model, mjOBJ_JOINT, name)  → qpos_adr
+       → mj_name2id(model, mjOBJ_ACTUATOR, name) → actuator_id
 ```
 
-### 与 zrobot_deploy 配合
+### 23 vs 12 关节
 
-由于本包提供了与 `zrobot_bridge` 相同的服务接口和命名，`zrobot_deploy` 中的 `FSM` 状态机可直接使用：
+MJCF 中定义了 23 个关节（12 腿部驱动 + 5 上肢被动 + 浮动基座 + 其他），但仅 12 个腿部关节配置了执行器。代码通过 `active_joint_count_` 区分：仅对 `actuator_id != -1` 的关节执行 PD 控制。
 
-```bash
-# 终端 1：启动 MuJoCo 仿真
-ros2 launch zrobot_mj_sim mujoco_bringup.launch.py
+### 零位偏移
 
-# 终端 2：启动部署状态机（需 zrobot_deploy 包已构建）
-ros2 run zrobot_deploy locomotion_node
-```
+与 `zrobot_bridge` 和 `zrobot_gz_sim` 一致的偏移机制：`/set_zeros` 记录当前关节位置作为零位偏移，此后上位机位置指令会自动加上偏移量，反馈位置则减去偏移量。
 
----
+### GLUT 渲染
 
-## 内部实现要点
-
-- **仿真循环**：由 ROS 2 定时器驱动，每次触发执行一次 `mj_step()` 批次（仿真步数根据控制频率和 MuJoCo timestep 自动计算）。
-- **线程安全**：`mjData` 的读写均在 `state_mutex_` 保护下进行，服务回调和控制循环共享同一互斥锁。
-- **关节对齐**：通过 `mj_name2id` 将 `joint_names` 参数中的名称映射为 MuJoCo 内部的 `qpos_adr`/`dof_adr`/`actuator_id`，支持任意子集的 23 通道数组语义。
-- **零位偏移**：采用与 `gazebo_motor_bridge_node` 相同的 `zero_offsets_` 机制，`/set_zeros` 后将偏移应用到所有位置反馈。
-- **服务直接写目标**：`/rob_stride_control` 将目标位置存入 `target_positions_`，由下一个控制定时器周期实际执行，保证控制指令与仿真步进同步。
-
----
-
-## 验证
-
-启动后执行以下检查确认节点正常工作：
-
-```bash
-# 1. 确认节点存在
-ros2 node list | grep mujoco
-
-# 2. 确认服务列表
-ros2 service list | grep -E "rob_stride_control|get_positions|set_zeros"
-
-# 3. 确认话题列表
-ros2 topic list | grep -E "joint_states|imu/data|clock"
-
-# 4. 检查反馈数据
-ros2 service call /get_positions rs_interface/srv/GetPositions
-
-# 5. 发送一条位置指令并观察 /joint_states 更新
-ros2 service call /rob_stride_control rs_interface/srv/RobStrideMsgs \
-  "{positions: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]}"
-```
+在独立线程中运行 GLUT 主循环，使用 `mjr_render` 绘制场景。支持鼠标交互和键盘快捷键。渲染不会阻塞仿真控制循环。

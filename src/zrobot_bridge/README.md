@@ -1,285 +1,155 @@
-# RobStride电机控制节点
+# zrobot_bridge
 
 ## 概述
 
-这是一个ROS2节点，用于控制多达23个RobStride电机。该节点通过CAN总线与电机通信，并提供了一个ROS2服务接口来批量控制所有电机。
+ROS 2 C++ 桥接节点，通过 CAN 总线与 RobStride 系列无刷电机通信。`MotorControllerNode` 暴露三个 ROS 2 服务（`/rob_stride_control`、`/get_positions`、`/set_zeros`），将上层控制指令转换为 CAN 扩展帧发送给 23 个电机，并将电机反馈（位置、速度、扭矩、温度）返回给调用方。
 
-## 功能特性
+## 依赖
 
-- ✅ 同时控制23个电机
-- ✅ 支持不同CAN ID的电机配置
-- ✅ 支持多种电机型号（ROBSTRIDE_00 至 ROBSTRIDE_06）
-- ✅ 通过ROS2服务提供位置控制
-- ✅ 实时获取电机反馈（位置、速度、扭矩、温度）
-- ✅ 线程安全的电机访问
-- ✅ 完整的错误处理和日志记录
+### 系统依赖
+- Linux CAN 支持（`socketCAN`）
+- 4 路 CAN 接口（默认：can10~can13，1 Mbps）
 
-## 节点信息
+### ROS 2
+- `rclcpp`
+- `rs_interface`（自定义服务定义包）
 
-### 节点名称
-`motor_controller_node`
-
-### 提供的服务
-`/motor_controller_node/rob_stride_control` (type: `rs_interface/RobStrideMsgs`)
-
-### 服务接口
-
-**请求 (Request):**
-```
-float32[23] positions  # 23个电机的目标位置 (单位: rad)
-```
-
-**响应 (Response):**
-```
-float32[23] feedback_positions    # 电机反馈位置
-float32[23] feedback_velocities   # 电机反馈速度
-float32[23] feedback_torques      # 电机反馈扭矩
-float32[23] feedback_temperatures # 电机反馈温度
-bool success                      # 执行是否成功
-string message                    # 执行状态消息
-```
-
-## 配置文件
-
-配置文件位置: `config/motor_config.yaml`
-
-### 主要参数
-
-| 参数名 | 类型 | 描述 | 默认值 |
-|--------|------|------|--------|
-| can_interface | string | CAN网络接口名称 | "can0" |
-| master_id | int | 主机ID | 0 |
-| motor_can_ids | array[23] | 各电机的CAN ID | [1,2,...,23] |
-| motor_types | array[23] | 各电机的型号类型 | [0,0,...,0] |
-
-### 电机类型定义
-
-| 类型值 | 电机型号 | 范围 | 最大速度 | 最大扭矩 |
-|--------|---------|------|---------|---------|
-| 0 | ROBSTRIDE_00 | 4π rad | 50 rad/s | 17 Nm |
-| 1 | ROBSTRIDE_01 | 4π rad | 44 rad/s | 17 Nm |
-| 2 | ROBSTRIDE_02 | 4π rad | 44 rad/s | 17 Nm |
-| 3 | ROBSTRIDE_03 | 4π rad | 50 rad/s | 60 Nm |
-| 4 | ROBSTRIDE_04 | 4π rad | 15 rad/s | 120 Nm |
-| 5 | ROBSTRIDE_05 | 4π rad | 33 rad/s | 17 Nm |
-| 6 | ROBSTRIDE_06 | 4π rad | 20 rad/s | 60 Nm |
-
-## 编译
+## 构建
 
 ```bash
-# 在工作空间根目录执行
-colcon build --packages-select zrobot_bridge
-
-# 编译特定包和依赖
 colcon build --packages-select rs_interface zrobot_bridge
 ```
 
-## 运行
+## 使用
 
-### 方式1: 使用launch文件
+### 1. 配置 CAN 接口
 
 ```bash
-# 首先source环境
-source install/setup.bash
+# 设置 4 路 CAN 总线
+sudo ip link set can10 up type can bitrate 1000000
+sudo ip link set can11 up type can bitrate 1000000
+sudo ip link set can12 up type can bitrate 1000000
+sudo ip link set can13 up type can bitrate 1000000
+```
 
-# 运行launch文件
+或使用脚本：
+
+```bash
+sudo bash src/zrobot_bridge/scripts/setup_can_interfaces.sh
+```
+
+### 2. 启动桥接节点
+
+```bash
 ros2 launch zrobot_bridge motor_controller.launch.py
 ```
 
-### 方式2: 直接运行节点
+### 3. 调用服务测试
 
 ```bash
-# 首先source环境
-source install/setup.bash
+# 发送位置命令（全零）
+ros2 service call /rob_stride_control rs_interface/srv/RobStrideMsgs "{positions: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]}"
 
-# 运行节点
-ros2 run zrobot_bridge motor_controller_node
+# 读取当前位置
+ros2 service call /get_positions rs_interface/srv/GetPositions
+
+# 设置零位
+ros2 service call /set_zeros rs_interface/srv/SetZeros
 ```
 
-## 使用示例
+## ROS 2 接口
 
-### Python客户端示例
+### 提供的服务
 
-```python
-import rclpy
-from rs_interface.srv import RobStrideMsgs
-import math
+| 服务名 | 类型 | 说明 |
+|--------|------|------|
+| `/rob_stride_control` | `rs_interface/srv/RobStrideMsgs` | 发送 23 个电机位置指令，返回完整反馈 |
+| `/get_positions` | `rs_interface/srv/GetPositions` | 读取当前电机位置 |
+| `/set_zeros` | `rs_interface/srv/SetZeros` | 设置机械零位偏移 |
 
-def main():
-    rclpy.init()
-    node = rclpy.create_node('motor_client')
-    
-    # 创建服务客户端
-    client = node.create_client(RobStrideMsgs, '/motor_controller_node/rob_stride_control')
-    
-    # 等待服务就绪
-    while not client.wait_for_service(timeout_sec=1.0):
-        node.get_logger().info('等待服务...')
-    
-    # 创建请求
-    request = RobStrideMsgs.Request()
-    
-    # 设置所有电机的目标位置（这里设置为0）
-    request.positions = [0.0] * 23
-    
-    # 或者设置不同的位置
-    # request.positions[0] = math.pi / 2  # 电机0设置为90度
-    # request.positions[1] = -math.pi / 2 # 电机1设置为-90度
-    
-    # 调用服务
-    future = client.call_async(request)
-    rclpy.spin_until_future_complete(node, future)
-    
-    # 处理响应
-    response = future.result()
-    
-    if response.success:
-        print("服务调用成功!")
-        for i in range(23):
-            print(f"电机{i}: 位置={response.feedback_positions[i]:.3f}, "
-                  f"速度={response.feedback_velocities[i]:.3f}, "
-                  f"扭矩={response.feedback_torques[i]:.3f}, "
-                  f"温度={response.feedback_temperatures[i]:.1f}")
-    else:
-        print(f"服务调用失败: {response.message}")
-    
-    rclpy.shutdown()
+### 节点参数
 
-if __name__ == '__main__':
-    main()
-```
+| 参数名 | 类型 | 默认值 | 说明 |
+|--------|------|--------|------|
+| `master_id` | int | 0xFD | CAN 主机 ID |
+| `motor_can_ids` | int[] | [0..22] | 各电机的 CAN ID |
+| `motor_types` | int[] | [2, 2, 4, 4, 3, 3, ...] | 各电机的执行器类型 |
+| `motor_can_interfaces` | string[] | ["can10", ...] | 各电机分配的 CAN 接口 |
+| `motor_kps` | float[] | 1.0 | 各电机位置 PID 比例增益 |
+| `motor_kds` | float[] | 0.5 | 各电机位置 PID 微分增益 |
 
-### ROS2 CLI 调用
-
-```bash
-# 调用服务，所有电机位置设为0
-ros2 service call /motor_controller_node/rob_stride_control \
-  rs_interface/RobStrideMsgs \
-  "positions: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]"
-```
-
-## 工作原理
-
-1. **初始化阶段**: 节点启动时，从参数服务器加载电机配置（CAN ID、电机类型）
-2. **电机创建**: 为每个电机创建一个`RobStrideMotor`对象，初始化CAN通信socket
-3. **服务监听**: 节点创建ROS2服务，监听来自客户端的控制请求
-4. **控制流程**: 当收到服务请求时：
-   - 验证请求数据（确保有23个位置信息）
-   - 向每个电机发送运动控制指令（`send_motion_command`）
-   - 接收电机反馈（位置、速度、扭矩、温度）
-   - 将反馈数据组织成响应返回给客户端
-
-## 重要注意事项
-
-### CAN配置
-
-运行此节点前，需要确保CAN接口已正确配置：
-
-```bash
-# 查看可用的CAN接口
-ip link
-
-# 启用CAN接口（如果还没启用）
-sudo ip link set can0 up type can bitrate 1000000
-
-# 禁用CAN接口（不再使用时）
-sudo ip link set can0 down
-```
-
-### 电机连接
-
-- 所有电机必须连接到同一条CAN总线
-- 每个电机必须有唯一的CAN ID
-- 电机CAN ID必须在0-255范围内
-
-### 参数配置
-
-编辑`config/motor_config.yaml`文件：
-- `motor_can_ids`: 设置为你实际使用的电机CAN ID
-- `motor_types`: 设置为对应电机的实际型号
-- `can_interface`: 确保与系统中的CAN接口名称一致
-
-## 故障排除
-
-### 1. "socket: Permission denied"
-**原因**: 没有足够权限访问CAN接口  
-**解决**: 使用sudo运行，或将用户添加到can用户组
-
-```bash
-sudo usermod -a -G can $USER
-```
-
-### 2. "ioctl: No such device"
-**原因**: CAN接口不存在或未启用  
-**解决**: 检查并启用CAN接口
-
-```bash
-ip link show can0
-sudo ip link set can0 up type can bitrate 1000000
-```
-
-### 3. 服务请求失败
-**原因**: 电机通信故障或未配置  
-**解决**:
-- 检查CAN总线连接
-- 确认电机CAN ID配置正确
-- 查看节点日志了解详细错误信息
-
-```bash
-ros2 node list  # 确认节点已运行
-ros2 node info /motor_controller_node  # 查看节点信息
-```
-
-## 代码结构
+## 项目结构
 
 ```
 zrobot_bridge/
-├── include/
-│   └── zrobot_bridge/
-│       ├── motor_cfg.h              # 电机驱动类定义
-│       └── motor_controller.h       # 控制节点类定义
-├── src/
-│   ├── main.cpp                     # 空的主程序（已被motor_controller_node.cpp替代）
-│   ├── motor_cfg.cpp                # 电机驱动实现
-│   └── motor_controller_node.cpp    # 控制节点实现
-├── launch/
-│   └── motor_controller.launch.py   # Launch配置文件
+├── CMakeLists.txt
+├── package.xml
 ├── config/
-│   └── motor_config.yaml            # 参数配置文件
-├── CMakeLists.txt                   # CMake构建配置
-└── package.xml                      # ROS2包元信息
+│   ├── motor_config.yaml           # 23 电机完整配置
+│   └── motor_config1.yaml          # 6 电机简化配置（测试用）
+├── include/zrobot_bridge/
+│   ├── motor_cfg.h                 # RobStrideMotor 类（CAN 协议实现）
+│   └── motor_controller.h          # MotorControllerNode 类声明
+├── launch/
+│   └── motor_controller.launch.py  # 启动文件
+├── scripts/
+│   └── setup_can_interfaces.sh     # CAN 接口配置脚本
+└── src/
+    ├── motor_cfg.cpp               # CAN 收发与 RobStride 协议实现
+    └── motor_controller_node.cpp   # ROS 2 节点主逻辑
 ```
 
-## 扩展和自定义
+## 技术细节
 
-### 修改控制参数
+### CAN 协议
 
-在`motor_controller_node.cpp`中的`handle_rob_stride_service`函数中，可以修改发送给电机的参数：
+`RobStrideMotor` 使用 **raw socket** 发送和接收 CAN 扩展帧（29-bit ID）。CAN ID 编码格式：
 
-```cpp
-auto [pos, vel, torq, temp] = motors_[i]->send_motion_command(
-    0.0f,                  // torque - 扭矩命令
-    target_position,       // position - 目标位置
-    5.0f,                  // velocity - 目标速度
-    0.5f,                  // kp - 比例增益
-    0.1f                   // kd - 微分增益
-);
+```
+CAN ID = (master_id << 24) | (communication_type << 16) | (motor_id << 8) | extra_data
 ```
 
-### 支持其他控制模式
+| 通信类型 | 值 | 说明 |
+|---------|-----|------|
+| `MotionControl` | 0x01 | 运动控制指令（位置/速度/扭矩/Kp/Kd） |
+| `MotorRequest` | 0x02 | 电机请求/反馈 |
+| `MotorEnable` | 0x03 | 使能电机 |
+| `MotorStop` | 0x04 | 停止/失能电机 |
+| `SetPosZero` | 0x06 | 设置机械零位 |
+| `Control_Mode` | 0x12 | 设置/读取控制器参数 |
 
-`RobStrideMotor`类还提供了其他控制模式：
-- `send_velocity_mode_command()` - 速度控制
-- `RobStrite_Motor_PosPP_control()` - 位置控制（PP模式）
-- `RobStrite_Motor_PosCSP_control()` - 位置控制（CSP模式）
-- `RobStrite_Motor_Current_control()` - 电流控制
+### 执行器类型
 
-可根据需要在服务回调中调用不同的控制函数。
+| 类型 | 最大位置 (rad) | 最大速度 (rad/s) | 最大扭矩 (Nm) |
+|------|---------------|------------------|--------------|
+| ROBSTRIDE_00 | 23.0 | 20.0 | 23.0 |
+| ROBSTRIDE_01 | 23.0 | 20.0 | 23.0 |
+| ROBSTRIDE_02 | 23.0 | 20.0 | 23.0 |
+| ROBSTRIDE_03 | 23.0 | 20.0 | 60.0 |
+| ROBSTRIDE_04 | 23.0 | 20.0 | 120.0 |
+| ROBSTRIDE_05 | 23.0 | 20.0 | 17.0 |
+| ROBSTRIDE_06 | 23.0 | 20.0 | 23.0 |
 
-## 许可证
+### CAN 总线分配
 
-Apache-2.0
+23 个电机分布在 4 路 CAN 总线上：
 
-## 作者
+| CAN 接口 | 电机索引 | 数量 |
+|----------|---------|------|
+| can10 | 0-5 | 6 |
+| can11 | 6-12 | 7 |
+| can12 | 13-16 | 4 |
+| can13 | 17-22 | 6 |
 
-根据RobStride电机通信协议和motor_cfg库开发
+### 数据流
+
+```
+上层控制节点 (e.g. zrobot_deploy)
+    ↓ /rob_stride_control (ROS 2 Service)
+MotorControllerNode
+    ↓ 每个电机独立 CAN socket（硬件过滤）
+23× RobStrideMotor
+    ↓ CAN 扩展帧
+23× RobStride 电机
+    ↑ 反馈（位置/速度/扭矩/温度）
+```

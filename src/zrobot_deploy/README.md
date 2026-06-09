@@ -1,136 +1,161 @@
-# ZRobot Deploy - 机器人运动控制FSM系统
+# zrobot_deploy
 
-## 项目简介
+## 概述
 
-这个软件包使用有限状态机（FSM）实现机器人的运动控制算法。底层通过向服务 `/rob_stride_control` 发送 `rs_interface/srv/RobStrideMsgs` 消息中的电机位置进行控制。
+ROS 2 C++ 运动控制系统，基于有限状态机（FSM）控制 zrobot 机器人。支持四种运行模式：FixStand（固定站立）、Locomotion（ONNX 推理运动）、PTLocomotion（LibTorch 推理运动）、Damping（软件阻尼仿真）。所有模式均通过 `/rob_stride_control` 服务向底层电机驱动发送 23 个关节的位置命令，控制频率 100 Hz。
 
-## 功能特性
+## 依赖
 
-- **FSM基类**: 提供了状态机的基础框架，包含ROS2服务调用、电机控制等通用功能
-- **FixStand状态机**: 实现机器人缓慢移动到机械零位并保持的功能
-- **键盘控制**: 通过键盘按键切换不同的状态机
-- **可扩展**: 易于添加新的状态机类型（如行走、小跑等）
+### 系统依赖
+- ONNX Runtime（`onnxruntime-linux-aarch64-1.16.3` 或 `onnxruntime-linux-x64-1.16.3`）
+- LibTorch（与系统架构匹配的 PyTorch C++ 库）
+- Eigen3
 
-## 架构设计
+### ROS 2
+- `rclcpp`
+- `rs_interface`（自定义服务定义包）
+- `std_msgs`
+- `sensor_msgs`
+- `geometry_msgs`
+- `tf2`
 
-### FSM基类 (FSM.h/FSM.cpp)
+### 策略模型文件
 
-- 提供与ROS2服务的接口
-- 管理电机位置发送和反馈接收
-- 定义状态机的通用接口
+放置在工作区 `resources/policy/` 目录下（默认路径编译时由 `POLICY_DIR` 宏定义）：
 
-### FixStand状态机 (FixStand.h/FixStand.cpp)
-
-实现三个内部状态：
-1. **INIT**: 初始化阶段
-2. **MOVING**: 从当前位置缓慢移动到机械零位（3秒）
-3. **STANDING**: 保持在零位
-
-### 主程序 (main.cpp)
-
-- 创建ROS2节点
-- 处理键盘输入
-- 管理状态机的启动和停止
-- 以100Hz频率运行控制循环
-
-## 编译
-
-在ROS2工作空间中编译：
-
-```bash
-cd /root/codes/zrobot_pi_ws
-colcon build --packages-select zrobot_deploy
+```
+resources/policy/
+├── policy.onnx          # Locomotion 使用的 ONNX 模型
+└── policy_1.pt          # PTLocomotion 使用的 TorchScript 模型
 ```
 
-## 运行
-
-1. 首先source工作空间：
+## 构建
 
 ```bash
-source /root/codes/zrobot_pi_ws/install/setup.bash
+# 首次需要在工作区根目录放置 ONNX Runtime 和 LibTorch
+# 目录结构参考 CMakeLists.txt 中的路径配置
+colcon build --packages-select rs_interface zrobot_deploy
 ```
 
-2. 确保 `/rob_stride_control` 服务正在运行
-
-3. 运行控制器：
+## 使用
 
 ```bash
+# 启动底层电机桥接节点
+ros2 launch zrobot_bridge motor_controller.launch.py
+
+# 另一终端启动 FSM 控制器
 ros2 run zrobot_deploy main
 ```
 
-## 键盘控制
+### 键盘控制
 
-程序运行后，可以使用以下按键：
+| 按键 | 功能 |
+|------|------|
+| `F` | 启动 FixStand（移动到机械零位并保持站立） |
+| `L` | 启动 Locomotion（ONNX 推理运动） |
+| `T` | 启动 PTLocomotion（TorchScript 推理运动） |
+| `D` | 启动 Damping（软件阻尼） |
+| `S` | 停止当前状态机 |
+| `Q` | 退出程序 |
 
-- **F**: 启动 FixStand 状态机（将机器人缓慢移动到机械零位）
-- **S**: 停止当前正在运行的状态机
-- **Q**: 退出程序
+### 注意事项
 
-## 电机控制说明
+- FixStand 使用 3 秒线性插值将机器人从当前位置移动到零位，避免突然动作
+- 启动 Locomotion 前确保 IMU 节点已运行（订阅 `/imu/data`）
+- 可在 `cmd_vel` 话题上发布速度指令控制机器人前进/转向
+- 停止 Damping 时会自动切换到 FixStand，防止机器人失电瘫倒
 
-- 系统通过 `/rob_stride_control` 服务发送23个电机的位置指令
-- 控制频率: 100Hz
-- FixStand状态机会在3秒内线性插值从当前位置移动到零位
-- 机械零位定义为所有电机位置为0弧度
+## ROS 2 接口
 
-## 添加新的状态机
+### 调用的服务
 
-要添加新的状态机类型，需要：
+| 服务名 | 类型 | 说明 |
+|--------|------|------|
+| `/rob_stride_control` | `rs_interface/srv/RobStrideMsgs` | 发送 23 电机位置命令（100 Hz） |
+| `/get_positions` | `rs_interface/srv/GetPositions` | 读取当前电机位置（初始化时使用） |
 
-1. 创建新的头文件继承自 `FSM` 类
-2. 实现 `initialize()`, `run()`, `exit()` 方法
-3. 在 `main.cpp` 中添加对应的键盘控制逻辑
-4. 在 `CMakeLists.txt` 中添加新的源文件
+### 订阅的话题
 
-示例：
+| 话题名 | 类型 | 用途 |
+|--------|------|------|
+| `/imu/data` | `sensor_msgs/msg/Imu` | Locomotion/PTLocomotion 观测输入（角速度、姿态角） |
+| `cmd_vel` | `geometry_msgs/msg/Twist` | 运动速度指令（vx, vy, wz） |
 
-```cpp
-// MyNewFSM.h
-#include "zrobot_deploy/FSM.h"
+## 项目结构
 
-class MyNewFSM : public FSM
-{
-public:
-    MyNewFSM(std::shared_ptr<rclcpp::Node> node);
-    void initialize() override;
-    void run() override;
-    void exit() override;
-};
+```
+zrobot_deploy/
+├── CMakeLists.txt
+├── package.xml
+├── include/zrobot_deploy/
+│   ├── FSM.h               # FSM 抽象基类
+│   ├── FixStand.h          # 固定站立状态机
+│   ├── Locomotion.h        # ONNX 推理运动状态机
+│   ├── PTLocomotion.h      # TorchScript 推理运动状态机
+│   └── Damping.h           # 软件阻尼状态机
+└── src/
+    ├── FSM.cpp             # 基类实现（服务调用、反馈缓存）
+    ├── FixStand.cpp        # 站立：3s 线性插值到零位
+    ├── Locomotion.cpp      # ONNX 推理控制循环
+    ├── PTLocomotion.cpp    # TorchScript 推理控制循环
+    ├── Damping.cpp         # 阻尼：q_cmd = q_fb - kd * dq_fb
+    └── main.cpp            # 入口：键盘控制 + 100Hz 主循环
 ```
 
-## 安全注意事项
+## 技术细节
 
-⚠️ **重要**: 
-- 运行前确保机器人处于安全状态
-- FixStand会将机器人移动到零位，确保这个姿态对您的机器人是安全的
-- 始终准备好紧急停止按钮
-- 测试时建议先使用较慢的移动速度
+### FSM 基类
 
-## 故障排除
+每个状态机继承自 `FSM`，实现三个虚函数：
 
-1. **服务未找到**: 确保 `/rob_stride_control` 服务正在运行
-   ```bash
-   ros2 service list | grep rob_stride_control
-   ```
+| 方法 | 调用时机 | 用途 |
+|------|---------|------|
+| `initialize()` | 切换到该状态时 | 初始化参数、订阅话题、启动线程 |
+| `run()` | 每 10ms（100 Hz） | 计算并发送电机位置 |
+| `exit()` | 离开该状态时 | 清理资源、停止线程 |
 
-2. **编译错误**: 确保已安装所有依赖
-   ```bash
-   rosdep install --from-paths src --ignore-src -r -y
-   ```
+### FixStand
 
-3. **键盘无响应**: 确保终端处于前台且具有输入焦点
+3 个内部状态：`INIT` → `MOVING`（3 秒线性插值）→ `STANDING`（保持零位）
 
-## 技术参数
+插值公式：`current[i] = initial[i] + t * (0 - initial[i])`，其中 `t = min(elapsed / 3.0, 1.0)`
 
-- ROS2版本: 需要支持服务调用的版本
-- 控制频率: 100Hz
-- 电机数量: 23个
-- 插值时间: 3秒（可在FixStand构造函数中修改）
+### Locomotion（ONNX 推理）
 
-## 许可证
+47 维观测向量：
 
-TODO: 添加许可证信息
+| 索引 | 维度 | 数据 |
+|------|------|------|
+| 0-1 | 2 | 步态相位 sin/cos（周期 0.64s） |
+| 2-4 | 3 | 指令速度 vx/vy/wz（缩放后） |
+| 5-16 | 12 | 关节位置（相对默认姿态） |
+| 17-28 | 12 | 关节速度 |
+| 29-40 | 12 | 前一步动作 |
+| 41-43 | 3 | IMU 角速度 |
+| 44-46 | 3 | IMU 欧拉角 |
 
-## 作者
+策略输出 12 维动作（腿部 12 个关节的增量位置），通过 `dof_indices_` 映射到 23 个电机索引。动作经过限幅安全保护（`action_abs_limit_`、`action_delta_limit_`），观测使用 15 帧堆叠输入。
 
-Created by Bill on 2026-01-16
+推理在独立线程中以 100 Hz 运行，主线程仅读取最新推理结果并发送位置命令。
+
+### PTLocomotion（LibTorch 推理）
+
+结构和逻辑与 Locomotion 完全一致，区别在于使用 `torch::jit::load()` 加载 `.pt` 模型进行推理。
+
+### Damping（软件阻尼）
+
+模拟弹簧阻尼效果：`q_cmd = q_fb - kd * dq_fb`，通过位置控制实现近似阻尼行为。
+
+- 默认 `kd_default_` = 0.08
+- 死区 `velocity_deadband_` = 0.02 rad/s（低于此不做阻尼）
+- 最大位置变化 `max_position_delta_` = 0.15 rad/步（安全限幅）
+
+### 主循环
+
+`main.cpp` 使用 raw terminal（`termios`）实现非阻塞键盘检测，100 Hz 控制循环中依次执行：
+
+```
+if 有按键: 切换/停止状态机
+if 有当前 FSM: current_fsm->run()
+rclcpp::spin_some(node)  # 处理话题回调
+```
