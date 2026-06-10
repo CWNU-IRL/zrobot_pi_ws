@@ -19,6 +19,10 @@ constexpr double kDefaultKd = 1.0;
 
 MujocoMotorBridgeNode* MujocoMotorBridgeNode::render_instance_ = nullptr;
 
+/**
+ * @brief 构造函数。初始化参数、加载 MuJoCo 模型、建立关节索引映射、
+ *        注册三个 ROS 2 服务、创建话题发布器、启动控制定时器与 GLUT 渲染线程。
+ */
 MujocoMotorBridgeNode::MujocoMotorBridgeNode()
     : Node("mujoco_motor_bridge_node"),
       active_joint_count_(kNumMotors),
@@ -169,6 +173,9 @@ MujocoMotorBridgeNode::MujocoMotorBridgeNode()
     RCLCPP_INFO(get_logger(), "MuJoCo motor bridge ready. Active joints: %zu", active_joint_count_);
 }
 
+/**
+ * @brief 析构函数。停止渲染线程，释放 MuJoCo 的 model 和 data 资源。
+ */
 MujocoMotorBridgeNode::~MujocoMotorBridgeNode()
 {
     render_running_ = false;
@@ -189,6 +196,10 @@ MujocoMotorBridgeNode::~MujocoMotorBridgeNode()
     }
 }
 
+/**
+ * @brief 返回默认的 12 个腿部关节名称（左腿 6 + 右腿 6）。
+ * @return 关节名称列表
+ */
 std::vector<std::string> MujocoMotorBridgeNode::default_joint_names()
 {
     return {
@@ -206,6 +217,11 @@ std::vector<std::string> MujocoMotorBridgeNode::default_joint_names()
         "R_foot_roll_joint"};
 }
 
+/**
+ * @brief 加载 MJCF/XML 模型文件，创建 data 并执行一次正向动力学计算。
+ * @param model_path MJCF 文件路径
+ * @throw std::runtime_error 模型加载或 data 分配失败时抛出
+ */
 void MujocoMotorBridgeNode::load_model(const std::string &model_path)
 {
     char error[1024] = {0};
@@ -226,6 +242,10 @@ void MujocoMotorBridgeNode::load_model(const std::string &model_path)
     mj_forward(model_, data_);
 }
 
+/**
+ * @brief 将 ROS 关节名称映射到 MuJoCo 内部索引（qpos 地址、dof 地址、执行器 ID）。
+ *        未找到的关节或执行器标记为 invalid，后续控制循环会跳过。
+ */
 void MujocoMotorBridgeNode::build_joint_mappings()
 {
     joint_handles_.assign(kNumMotors, JointHandle{-1, -1, -1, -1, false});
@@ -255,6 +275,11 @@ void MujocoMotorBridgeNode::build_joint_mappings()
     }
 }
 
+/**
+ * @brief 按名称查找 MuJoCo 传感器，返回其在 sensordata 数组中的地址和维度。
+ * @param name 传感器名称（如 "orientation"）
+ * @return SensorHandle，valid 为 false 表示未找到
+ */
 MujocoMotorBridgeNode::SensorHandle MujocoMotorBridgeNode::find_sensor_handle(const std::string &name) const
 {
     const int sensor_id = mj_name2id(model_, mjOBJ_SENSOR, name.c_str());
@@ -271,6 +296,11 @@ MujocoMotorBridgeNode::SensorHandle MujocoMotorBridgeNode::find_sensor_handle(co
         true};
 }
 
+/**
+ * @brief 从 MuJoCo data 中读取关节位置、速度、力矩到内部缓存数组。
+ * @note 调用方需持有 state_mutex_ 锁。
+ *       位置会减去 zero_offsets_，使反馈值相对于用户设定的零位。
+ */
 void MujocoMotorBridgeNode::update_state_from_sim_locked()
 {
     if (!model_ || !data_)
@@ -305,6 +335,11 @@ void MujocoMotorBridgeNode::update_state_from_sim_locked()
     has_state_ = true;
 }
 
+/**
+ * @brief 将目标位置转换为 MuJoCo 控制输入写入 data_->ctrl。
+ *        力矩模式下通过 PD 计算力矩；位置模式下直接写入目标位置。
+ * @note 调用方需持有 state_mutex_ 锁。
+ */
 void MujocoMotorBridgeNode::apply_control_locked()
 {
     if (!model_ || !data_)
@@ -342,6 +377,16 @@ void MujocoMotorBridgeNode::apply_control_locked()
     }
 }
 
+/**
+ * @brief PD 控制律：tau = (target_q - current_q) * kp + (target_dq - current_dq) * kd。
+ * @param target_q  目标位置（rad）
+ * @param current_q 当前实际位置（rad）
+ * @param target_dq 目标速度（通常为 0）
+ * @param current_dq 当前实际速度（rad/s）
+ * @param kp 比例增益
+ * @param kd 微分增益
+ * @return 计算得到的力矩值（Nm）
+ */
 double MujocoMotorBridgeNode::compute_tau(
     double target_q,
     double current_q,
@@ -353,6 +398,10 @@ double MujocoMotorBridgeNode::compute_tau(
     return (target_q - current_q) * kp + (target_dq - current_dq) * kd;
 }
 
+/**
+ * @brief 控制定时器回调。按 control_frequency_ 频率执行：
+ *        加锁 → apply_control_locked → mj_step（多次）→ update_state_from_sim_locked → 发布话题。
+ */
 void MujocoMotorBridgeNode::control_loop()
 {
     if (!model_ || !data_)
@@ -402,6 +451,11 @@ void MujocoMotorBridgeNode::control_loop()
     }
 }
 
+/**
+ * @brief 处理 /rob_stride_control 服务请求。
+ *        将 23 个目标位置（加零位偏移）存入 target_positions_，
+ *        并返回当前关节的反馈（位置、速度、力矩、模拟温度）。
+ */
 void MujocoMotorBridgeNode::on_rob_stride_control(
     const std::shared_ptr<rs_interface::srv::RobStrideMsgs::Request> request,
     std::shared_ptr<rs_interface::srv::RobStrideMsgs::Response> response)
@@ -449,6 +503,9 @@ void MujocoMotorBridgeNode::on_rob_stride_control(
     response->message = has_state ? "Command stored" : "No simulation state available";
 }
 
+/**
+ * @brief 处理 /get_positions 服务请求。返回当前各关节的位置（已减去零位偏移）。
+ */
 void MujocoMotorBridgeNode::on_get_positions(
     const std::shared_ptr<rs_interface::srv::GetPositions::Request>,
     std::shared_ptr<rs_interface::srv::GetPositions::Response> response)
@@ -472,6 +529,10 @@ void MujocoMotorBridgeNode::on_get_positions(
     response->message = has_state ? "OK" : "No simulation state available";
 }
 
+/**
+ * @brief 处理 /set_zeros 服务请求。将当前关节 qpos 值记录为零位偏移，
+ *        此后反馈位置 = qpos - zero_offset，使当前姿态成为"零位"。
+ */
 void MujocoMotorBridgeNode::on_set_zeros(
     const std::shared_ptr<rs_interface::srv::SetZeros::Request>,
     std::shared_ptr<rs_interface::srv::SetZeros::Response> response)
@@ -500,6 +561,13 @@ void MujocoMotorBridgeNode::on_set_zeros(
     response->message = "Zero offsets captured from current joint positions";
 }
 
+/**
+ * @brief 发布 /joint_states 话题，仅包含 active_joint_count_ 个活动关节的数据。
+ * @param stamp     时间戳
+ * @param positions  23 个关节的位置数组
+ * @param velocities 23 个关节的速度数组
+ * @param efforts    23 个关节的力矩数组
+ */
 void MujocoMotorBridgeNode::publish_joint_states(
     const rclcpp::Time &stamp,
     const std::array<float, kNumMotors> &positions,
@@ -524,6 +592,13 @@ void MujocoMotorBridgeNode::publish_joint_states(
     joint_state_pub_->publish(msg);
 }
 
+/**
+ * @brief 发布 /imu/data 话题。从 MuJoCo sensordata 中读取四元数、角速度和线加速度。
+ * @param stamp       时间戳
+ * @param orientation 四元数传感器句柄
+ * @param gyro        陀螺仪传感器句柄
+ * @param accel       加速度计传感器句柄
+ */
 void MujocoMotorBridgeNode::publish_imu(
     const rclcpp::Time &stamp,
     const SensorHandle &orientation,
@@ -577,6 +652,10 @@ void MujocoMotorBridgeNode::publish_imu(
     imu_pub_->publish(msg);
 }
 
+/**
+ * @brief 发布 /clock 话题，将 MuJoCo 仿真时间传递给 ROS 2 时间系统。
+ * @param stamp 当前仿真时间
+ */
 void MujocoMotorBridgeNode::publish_clock(const rclcpp::Time &stamp)
 {
     rosgraph_msgs::msg::Clock msg;
@@ -584,6 +663,11 @@ void MujocoMotorBridgeNode::publish_clock(const rclcpp::Time &stamp)
     clock_pub_->publish(msg);
 }
 
+/**
+ * @brief 获取当前 MuJoCo 仿真时间。若 data 不可用则返回 ROS 系统时间。
+ * @note 调用方需持有 state_mutex_ 锁。
+ * @return rclcpp::Time 格式的仿真时间
+ */
 rclcpp::Time MujocoMotorBridgeNode::current_sim_time_locked() const
 {
     if (!data_)
@@ -595,6 +679,10 @@ rclcpp::Time MujocoMotorBridgeNode::current_sim_time_locked() const
     return rclcpp::Time(nanos, RCL_ROS_TIME);
 }
 
+/**
+ * @brief 重置仿真到初始状态：mj_resetData → mj_forward，清除零位偏移，
+ *        并将目标位置设为复位后的关节位置，防止复位后瞬间跳变。
+ */
 void MujocoMotorBridgeNode::reset_simulation()
 {
     if (!model_ || !data_)
@@ -630,12 +718,19 @@ void MujocoMotorBridgeNode::reset_simulation()
     RCLCPP_INFO(get_logger(), "Simulation reset to initial state.");
 }
 
+/**
+ * @brief 在独立线程中启动 GLUT 渲染循环。
+ */
 void MujocoMotorBridgeNode::start_render_thread()
 {
     render_running_ = true;
     render_thread_ = std::thread(&MujocoMotorBridgeNode::render_loop, this);
 }
 
+/**
+ * @brief GLUT 渲染线程主循环。初始化窗口、注册回调、以 ~60 FPS 运行事件循环。
+ *        窗口关闭时清理场景和上下文资源。
+ */
 void MujocoMotorBridgeNode::render_loop()
 {
     int glut_argc = 0;
@@ -700,6 +795,10 @@ void MujocoMotorBridgeNode::render_loop()
     RCLCPP_INFO(get_logger(), "MuJoCo renderer stopped.");
 }
 
+/**
+ * @brief 更新并渲染一帧 MuJoCo 场景。在持锁状态下调用 mjv_updateScene，
+ *        然后通过 mjr_render 绘制到 GLUT 窗口。
+ */
 void MujocoMotorBridgeNode::render_scene()
 {
     if (!render_initialized_ || !model_ || !data_)
@@ -718,6 +817,9 @@ void MujocoMotorBridgeNode::render_scene()
     glutSwapBuffers();
 }
 
+/**
+ * @brief GLUT 显示回调。委托给 render_instance_ 的 render_scene()。
+ */
 /* static */ void MujocoMotorBridgeNode::glut_display()
 {
     if (render_instance_)
@@ -726,6 +828,9 @@ void MujocoMotorBridgeNode::render_scene()
     }
 }
 
+/**
+ * @brief GLUT 窗口大小变化回调。更新视口尺寸。
+ */
 /* static */ void MujocoMotorBridgeNode::glut_reshape(int width, int height)
 {
     if (!render_instance_)
@@ -737,6 +842,9 @@ void MujocoMotorBridgeNode::render_scene()
     glViewport(0, 0, width, height);
 }
 
+/**
+ * @brief GLUT 鼠标按键回调。将按钮映射到 MuJoCo 相机动作（平移/缩放/旋转）。
+ */
 /* static */ void MujocoMotorBridgeNode::glut_mouse(int button, int state, int x, int y)
 {
     if (!render_instance_)
@@ -768,6 +876,9 @@ void MujocoMotorBridgeNode::render_scene()
     }
 }
 
+/**
+ * @brief GLUT 鼠标拖拽回调。计算鼠标位移并传递给 MuJoCo 相机控制。
+ */
 /* static */ void MujocoMotorBridgeNode::glut_motion(int x, int y)
 {
     if (!render_instance_ || render_instance_->mouse_action_left_ == mjMOUSE_NONE)
@@ -791,6 +902,9 @@ void MujocoMotorBridgeNode::render_scene()
     }
 }
 
+/**
+ * @brief GLUT 键盘回调。ESC 退出渲染，r 重置仿真，c 重置相机视角。
+ */
 /* static */ void MujocoMotorBridgeNode::glut_keyboard(unsigned char key, int, int)
 {
     if (!render_instance_)
@@ -816,6 +930,12 @@ void MujocoMotorBridgeNode::render_scene()
     }
 }
 
+/**
+ * @brief 将 GLUT 鼠标按钮和状态映射为 MuJoCo 相机动作类型。
+ * @param button GLUT 鼠标按钮（LEFT/RIGHT/MIDDLE）
+ * @param state  GLUT 状态（DOWN/UP）
+ * @return mjtMouse 动作枚举（平移/缩放/旋转/无动作）
+ */
 mjtMouse MujocoMotorBridgeNode::map_button_to_action(int button, int state) const
 {
     if (state != GLUT_DOWN)
@@ -836,6 +956,9 @@ mjtMouse MujocoMotorBridgeNode::map_button_to_action(int button, int state) cons
     }
 }
 
+/**
+ * @brief 程序入口。初始化 ROS 2，创建并运行 MujocoMotorBridgeNode，异常时打印错误信息。
+ */
 int main(int argc, char **argv)
 {
     rclcpp::init(argc, argv);
