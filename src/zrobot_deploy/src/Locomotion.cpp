@@ -38,7 +38,7 @@ Locomotion::Locomotion(std::shared_ptr<rclcpp::Node> node)
         current_euler_.setZero();
         current_command_.setZero();
 
-        dof_indices_ = {5, 4, 3, 2, 1, 0, 11, 10, 9, 8, 7, 6};
+        dof_indices_ = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11};
 }
 
 Locomotion::~Locomotion()
@@ -258,7 +258,7 @@ void Locomotion::initializeParameters()
     auto default_pose_param = node_->declare_parameter<std::vector<double>>(
         "default_pose", std::vector<double>(NUM_ACTIONS, 0.0));
     auto dof_indices_param = node_->declare_parameter<std::vector<int64_t>>(
-        "dof_indices", std::vector<int64_t>{5, 4, 3, 2, 1, 0, 11, 10, 9, 8, 7, 6});
+        "dof_indices", std::vector<int64_t>{0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11});
 
     if (frame_stack_ <= 0)
     {
@@ -302,7 +302,7 @@ void Locomotion::initializeParameters()
     {
         RCLCPP_WARN(node_->get_logger(), "dof_indices size=%zu, expected=%d, using defaults",
                     dof_indices_param.size(), NUM_ACTIONS);
-        dof_indices_ = {5, 4, 3, 2, 1, 0, 11, 10, 9, 8, 7, 6};
+        dof_indices_ = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11};
     }
     else
     {
