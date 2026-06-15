@@ -227,7 +227,9 @@ void PTLocomotion::initializeParameters()
     require_imu_before_locomotion_ = getOrDeclareParameter<bool>(node_, "require_imu_before_locomotion", true);
 
     auto default_pose_param = getOrDeclareParameter<std::vector<double>>(
-        node_, "default_pose", std::vector<double>(NUM_ACTIONS, 0.0));
+        node_, "default_pose", std::vector<double>{
+            0.0, 0.0, -0.45, -0.85, 0.4, 0.0,   // L: hip_roll, hip_yaw, hip_pitch, knee, foot_pitch, foot_roll
+            0.0, 0.0, 0.45, 0.85, -0.4, 0.0});  // R: hip_roll, hip_yaw, hip_pitch, knee, foot_pitch, foot_roll
     auto dof_indices_param = getOrDeclareParameter<std::vector<int64_t>>(
         node_, "dof_indices", std::vector<int64_t>{0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11});
 

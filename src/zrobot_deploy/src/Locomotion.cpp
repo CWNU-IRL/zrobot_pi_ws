@@ -256,7 +256,9 @@ void Locomotion::initializeParameters()
     obs_scale_dof_vel_ = static_cast<float>(node_->declare_parameter<double>("obs_scale_dof_vel", 1.0));
 
     auto default_pose_param = node_->declare_parameter<std::vector<double>>(
-        "default_pose", std::vector<double>(NUM_ACTIONS, 0.0));
+        "default_pose", std::vector<double>{
+            0.0, 0.0, -0.45, -0.85, 0.4, 0.0,   // L: hip_roll, hip_yaw, hip_pitch, knee, foot_pitch, foot_roll
+            0.0, 0.0, 0.45, 0.85, -0.4, 0.0});  // R: hip_roll, hip_yaw, hip_pitch, knee, foot_pitch, foot_roll
     auto dof_indices_param = node_->declare_parameter<std::vector<int64_t>>(
         "dof_indices", std::vector<int64_t>{0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11});
 
