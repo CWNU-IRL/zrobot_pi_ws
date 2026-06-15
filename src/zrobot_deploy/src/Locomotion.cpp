@@ -29,7 +29,7 @@ Locomotion::Locomotion(std::shared_ptr<rclcpp::Node> node)
             obs_scale_lin_vel_(1.0f),
             obs_scale_ang_vel_(1.0f),
             obs_scale_dof_pos_(1.0f),
-            obs_scale_dof_vel_(1.0f),
+            obs_scale_dof_vel_(0.05f),
             counter_(0),
             model_ready_(false)
 {
@@ -253,7 +253,7 @@ void Locomotion::initializeParameters()
     obs_scale_lin_vel_ = static_cast<float>(node_->declare_parameter<double>("obs_scale_lin_vel", 1.0));
     obs_scale_ang_vel_ = static_cast<float>(node_->declare_parameter<double>("obs_scale_ang_vel", 1.0));
     obs_scale_dof_pos_ = static_cast<float>(node_->declare_parameter<double>("obs_scale_dof_pos", 1.0));
-    obs_scale_dof_vel_ = static_cast<float>(node_->declare_parameter<double>("obs_scale_dof_vel", 1.0));
+    obs_scale_dof_vel_ = static_cast<float>(node_->declare_parameter<double>("obs_scale_dof_vel", 0.05));
 
     auto default_pose_param = node_->declare_parameter<std::vector<double>>(
         "default_pose", std::vector<double>{

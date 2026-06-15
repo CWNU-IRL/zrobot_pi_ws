@@ -48,7 +48,7 @@ PTLocomotion::PTLocomotion(std::shared_ptr<rclcpp::Node> node)
       obs_scale_lin_vel_(1.0f),
       obs_scale_ang_vel_(1.0f),
       obs_scale_dof_pos_(1.0f),
-      obs_scale_dof_vel_(1.0f),
+      obs_scale_dof_vel_(0.05f),
       counter_(0),
       model_ready_(false)
 {
@@ -221,7 +221,7 @@ void PTLocomotion::initializeParameters()
     obs_scale_lin_vel_ = static_cast<float>(getOrDeclareParameter<double>(node_, "obs_scale_lin_vel", 1.0));
     obs_scale_ang_vel_ = static_cast<float>(getOrDeclareParameter<double>(node_, "obs_scale_ang_vel", 1.0));
     obs_scale_dof_pos_ = static_cast<float>(getOrDeclareParameter<double>(node_, "obs_scale_dof_pos", 1.0));
-    obs_scale_dof_vel_ = static_cast<float>(getOrDeclareParameter<double>(node_, "obs_scale_dof_vel", 1.0));
+    obs_scale_dof_vel_ = static_cast<float>(getOrDeclareParameter<double>(node_, "obs_scale_dof_vel", 0.05));
 
     startup_hold_seconds_ = getOrDeclareParameter<double>(node_, "startup_hold_seconds", 0.5);
     require_imu_before_locomotion_ = getOrDeclareParameter<bool>(node_, "require_imu_before_locomotion", true);
