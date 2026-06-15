@@ -24,9 +24,9 @@ Locomotion::Locomotion(std::shared_ptr<rclcpp::Node> node)
             frame_stack_(15),
             model_obs_dim_(NUM_SINGLE_OBS * 15),
             action_scale_(0.25f),
-            obs_clip_(100.0f),
-            act_clip_(100.0f),
-            obs_scale_lin_vel_(1.0f),
+            obs_clip_(18.0f),
+            act_clip_(18.0f),
+            obs_scale_lin_vel_(2.0f),
             obs_scale_ang_vel_(1.0f),
             obs_scale_dof_pos_(1.0f),
             obs_scale_dof_vel_(0.05f),
@@ -247,10 +247,10 @@ void Locomotion::initializeParameters()
     model_obs_dim_ = node_->declare_parameter<int>("model_obs_dim", NUM_SINGLE_OBS * frame_stack_);
 
     action_scale_ = static_cast<float>(node_->declare_parameter<double>("action_scale", 0.25));
-    obs_clip_ = static_cast<float>(node_->declare_parameter<double>("clip_observations", 100.0));
-    act_clip_ = static_cast<float>(node_->declare_parameter<double>("clip_actions", 100.0));
+    obs_clip_ = static_cast<float>(node_->declare_parameter<double>("clip_observations", 18.0));
+    act_clip_ = static_cast<float>(node_->declare_parameter<double>("clip_actions", 18.0));
 
-    obs_scale_lin_vel_ = static_cast<float>(node_->declare_parameter<double>("obs_scale_lin_vel", 1.0));
+    obs_scale_lin_vel_ = static_cast<float>(node_->declare_parameter<double>("obs_scale_lin_vel", 2.0));
     obs_scale_ang_vel_ = static_cast<float>(node_->declare_parameter<double>("obs_scale_ang_vel", 1.0));
     obs_scale_dof_pos_ = static_cast<float>(node_->declare_parameter<double>("obs_scale_dof_pos", 1.0));
     obs_scale_dof_vel_ = static_cast<float>(node_->declare_parameter<double>("obs_scale_dof_vel", 0.05));
