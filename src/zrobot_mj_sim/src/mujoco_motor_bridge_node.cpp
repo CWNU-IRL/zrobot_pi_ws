@@ -13,8 +13,18 @@
 namespace
 {
 constexpr double kDefaultControlFrequency = 200.0;
-constexpr double kDefaultKp = 40.0;
+constexpr double kDefaultKp = 120.0;
 constexpr double kDefaultKd = 1.0;
+
+std::vector<double> default_kp_vec(size_t count)
+{
+    std::vector<double> kp(count, 40.0);
+    if (count >= 12) {
+        kp[0] = 120.0; kp[1] = 120.0; kp[2] = 120.0; kp[3] = 120.0; kp[4] = 40.0; kp[5] = 40.0;
+        kp[6] = 120.0; kp[7] = 120.0; kp[8] = 120.0; kp[9] = 120.0; kp[10] = 40.0; kp[11] = 40.0;
+    }
+    return kp;
+}
 }
 
 MujocoMotorBridgeNode* MujocoMotorBridgeNode::render_instance_ = nullptr;
@@ -41,7 +51,7 @@ MujocoMotorBridgeNode::MujocoMotorBridgeNode()
     render_instance_ = this;
     joint_names_ = declare_parameter<std::vector<std::string>>("joint_names", default_joint_names());
 
-    std::vector<double> default_kp(kNumMotors, kDefaultKp);
+    std::vector<double> default_kp = default_kp_vec(kNumMotors);
     std::vector<double> default_kd(kNumMotors, kDefaultKd);
     kp_ = declare_parameter<std::vector<double>>("kp", default_kp);
     kd_ = declare_parameter<std::vector<double>>("kd", default_kd);
