@@ -13,15 +13,17 @@
 namespace
 {
 constexpr double kDefaultControlFrequency = 200.0;
-constexpr double kDefaultKp = 120.0;
-constexpr double kDefaultKd = 1.0;
+constexpr double kDefaultKp = 200.0;
+constexpr double kDefaultKd = 10.0;
 
 std::vector<double> default_kp_vec(size_t count)
 {
-    std::vector<double> kp(count, 40.0);
+    std::vector<double> kp(count, 200.0);
     if (count >= 12) {
-        kp[0] = 120.0; kp[1] = 120.0; kp[2] = 120.0; kp[3] = 120.0; kp[4] = 40.0; kp[5] = 40.0;
-        kp[6] = 120.0; kp[7] = 120.0; kp[8] = 120.0; kp[9] = 120.0; kp[10] = 40.0; kp[11] = 40.0;
+        kp[2] = 350.0; kp[3] = 350.0;  // hip_pitch, knee
+        kp[4] = 150.0; kp[5] = 150.0;  // foot_pitch, foot_roll
+        kp[8] = 350.0; kp[9] = 350.0;
+        kp[10] = 150.0; kp[11] = 150.0;
     }
     return kp;
 }
