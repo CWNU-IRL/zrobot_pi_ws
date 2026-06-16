@@ -16,7 +16,7 @@ Locomotion::Locomotion(std::shared_ptr<rclcpp::Node> node)
     motor_feedback_ready_(false),
     require_imu_before_locomotion_(true),
     enable_action_safety_(true),
-    startup_hold_seconds_(0.5),
+    startup_hold_seconds_(3.0),
     action_delta_limit_(0.08f),
     action_abs_limit_(1.5f),
       dt_(0.01),
@@ -102,23 +102,41 @@ void Locomotion::run()
     const auto elapsed = std::chrono::duration<double>(Clock::now() - init_time_).count();
     if (elapsed < startup_hold_seconds_)
     {
-        if (!sendMotorPositions(current_motor_positions_))
+        std::array<float, 23> hold_positions{};
+        for (int i = 0; i < NUM_ACTIONS; ++i)
         {
-            RCLCPP_ERROR(node_->get_logger(), "Failed to hold motor positions during startup warmup");
+            const int motor_idx = dof_indices_[i];
+            if (motor_idx >= 0 && motor_idx < NUM_MOTORS)
+            {
+                hold_positions[static_cast<size_t>(motor_idx)] = default_pose_(i);
+            }
+        }
+        if (!sendMotorPositions(hold_positions))
+        {
+            RCLCPP_ERROR(node_->get_logger(), "Failed to hold default pose during startup warmup");
         }
         return;
     }
 
     if (require_imu_before_locomotion_ && !imu_received_)
     {
+        std::array<float, 23> hold_positions{};
+        for (int i = 0; i < NUM_ACTIONS; ++i)
+        {
+            const int motor_idx = dof_indices_[i];
+            if (motor_idx >= 0 && motor_idx < NUM_MOTORS)
+            {
+                hold_positions[static_cast<size_t>(motor_idx)] = default_pose_(i);
+            }
+        }
         RCLCPP_WARN_THROTTLE(
             node_->get_logger(),
             *node_->get_clock(),
             2000,
-            "IMU data not received yet, holding current pose in Locomotion");
-        if (!sendMotorPositions(current_motor_positions_))
+            "IMU data not received yet, holding default pose in Locomotion");
+        if (!sendMotorPositions(hold_positions))
         {
-            RCLCPP_ERROR(node_->get_logger(), "Failed to hold motor positions while waiting IMU");
+            RCLCPP_ERROR(node_->get_logger(), "Failed to hold default pose while waiting IMU");
         }
         return;
     }
@@ -254,6 +272,9 @@ void Locomotion::initializeParameters()
     obs_scale_ang_vel_ = static_cast<float>(node_->declare_parameter<double>("obs_scale_ang_vel", 1.0));
     obs_scale_dof_pos_ = static_cast<float>(node_->declare_parameter<double>("obs_scale_dof_pos", 1.0));
     obs_scale_dof_vel_ = static_cast<float>(node_->declare_parameter<double>("obs_scale_dof_vel", 0.05));
+
+    startup_hold_seconds_ = node_->declare_parameter<double>("startup_hold_seconds", 3.0);
+    require_imu_before_locomotion_ = node_->declare_parameter<bool>("require_imu_before_locomotion", true);
 
     auto default_pose_param = node_->declare_parameter<std::vector<double>>(
         "default_pose", std::vector<double>{
