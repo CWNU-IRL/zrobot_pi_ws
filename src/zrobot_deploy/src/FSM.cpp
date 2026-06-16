@@ -78,6 +78,7 @@ bool FSM::sendMotorPositions(const std::array<float, 23>& positions)
     {
         auto response = future.get();
         if (response->feedback_positions.size() == 23) {
+            std::lock_guard<std::mutex> lock(feedback_mutex_);
             for (size_t i = 0; i < 23; ++i) {
                 feedback_positions_[i] = response->feedback_positions[i];
                 feedback_velocities_[i] = response->feedback_velocities[i];

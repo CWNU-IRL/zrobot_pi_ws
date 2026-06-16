@@ -401,8 +401,13 @@ void PTLocomotion::collectObservations()
             continue;
         }
 
-        const float q_rel = feedback_positions_[static_cast<size_t>(idx)] - default_pose_(i);
-        const float dq = feedback_velocities_[static_cast<size_t>(idx)];
+        float q, dq;
+        {
+            std::lock_guard<std::mutex> lock(feedback_mutex_);
+            q = feedback_positions_[static_cast<size_t>(idx)];
+            dq = feedback_velocities_[static_cast<size_t>(idx)];
+        }
+        const float q_rel = q - default_pose_(i);
 
         obs_current_(5 + i) = q_rel * obs_scale_dof_pos_;
         obs_current_(17 + i) = dq * obs_scale_dof_vel_;

@@ -5,6 +5,7 @@
 #include <rs_interface/srv/rob_stride_msgs.hpp>
 #include <rs_interface/srv/get_positions.hpp>
 #include <memory>
+#include <mutex>
 #include <vector>
 #include <array>
 
@@ -63,6 +64,8 @@ protected:
     std::array<float, 23> feedback_velocities_;
     std::array<float, 23> feedback_torques_;
     std::array<float, 23> feedback_temperatures_;
+
+    mutable std::mutex feedback_mutex_;
 };
 
 #endif //ZROBOT_DEPLOY_FSM_H

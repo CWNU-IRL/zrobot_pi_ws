@@ -13,17 +13,15 @@
 namespace
 {
 constexpr double kDefaultControlFrequency = 200.0;
-constexpr double kDefaultKp = 200.0;
-constexpr double kDefaultKd = 10.0;
+constexpr double kDefaultKp = 120.0;
+constexpr double kDefaultKd = 1.0;
 
 std::vector<double> default_kp_vec(size_t count)
 {
-    std::vector<double> kp(count, 200.0);
+    std::vector<double> kp(count, 120.0);
     if (count >= 12) {
-        kp[2] = 350.0; kp[3] = 350.0;  // hip_pitch, knee
-        kp[4] = 150.0; kp[5] = 150.0;  // foot_pitch, foot_roll
-        kp[8] = 350.0; kp[9] = 350.0;
-        kp[10] = 150.0; kp[11] = 150.0;
+        kp[4] = 40.0; kp[5] = 40.0;
+        kp[10] = 40.0; kp[11] = 40.0;
     }
     return kp;
 }
@@ -412,7 +410,7 @@ double MujocoMotorBridgeNode::compute_tau(
 
 /**
  * @brief 控制定时器回调。按 control_frequency_ 频率执行：
- *        加锁 → apply_control_locked → mj_step（多次）→ update_state_from_sim_locked → 发布话题。
+ *        加锁 → (apply_control_locked → mj_step) × sim_substeps → update_state → 发布话题。
  */
 void MujocoMotorBridgeNode::control_loop()
 {
@@ -435,9 +433,9 @@ void MujocoMotorBridgeNode::control_loop()
         std::lock_guard<std::mutex> lock(state_mutex_);
         if (is_target_initialized_)
         {
-            apply_control_locked();
             for (size_t step = 0; step < sim_substeps_; ++step)
             {
+                apply_control_locked();
                 mj_step(model_, data_);
             }
             update_state_from_sim_locked();
