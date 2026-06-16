@@ -1,0 +1,7 @@
+cmd_vel_publisher:
+  ros__parameters:
+    publish_rate: 10.0
+    velocity_x: 0.4
+    velocity_y: 0.0
+    angular_z: 0.0
+    topic_name: "cmd_vel"

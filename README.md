@@ -31,11 +31,11 @@ sudo apt install ros-humble-ros-gz-sim ros-humble-ros-gz-bridge ros-humble-gz-ro
 
 手动下载并放置于 `third_party/` 目录：
 
-| 库 | 架构 | 版本 | 用途 |
-|---|------|------|------|
-| MuJoCo | 同系统 | 3.9.0 | MuJoCo 仿真引擎 |
-| ONNX Runtime | aarch64 + x64 | 1.16.3 | Locomotion FSM 推理引擎 |
-| LibTorch | x86_64 (third_party) / aarch64 (系统 Python) | 2.12 | PTLocomotion FSM 推理引擎 |
+| 库           | 架构                                         | 版本   | 用途                      |
+| ------------ | -------------------------------------------- | ------ | ------------------------- |
+| MuJoCo       | 同系统                                       | 3.9.0  | MuJoCo 仿真引擎           |
+| ONNX Runtime | aarch64 + x64                                | 1.16.3 | Locomotion FSM 推理引擎   |
+| LibTorch     | x86_64 (third_party) / aarch64 (系统 Python) | 2.12   | PTLocomotion FSM 推理引擎 |
 
 ## 构建
 
@@ -93,14 +93,14 @@ ros2 run zrobot_deploy main
 
 ### 键盘控制（zrobot_deploy）
 
-| 按键 | 模式 | 说明 |
-|------|------|------|
-| `F` | FixStand | 3 秒线性插值到机械零位并保持站立 |
-| `L` | Locomotion | ONNX Runtime 推理运动（需 IMU 数据） |
-| `T` | PTLocomotion | LibTorch 推理运动（需 IMU 数据） |
-| `D` | Damping | 软件阻尼模式 |
-| `S` | Stop | 停止当前状态机（Damping 停止时自动切换到 FixStand） |
-| `Q` | Quit | 退出程序 |
+| 按键 | 模式         | 说明                                                |
+| ---- | ------------ | --------------------------------------------------- |
+| `F`  | FixStand     | 3 秒线性插值到机械零位并保持站立                    |
+| `L`  | Locomotion   | ONNX Runtime 推理运动（需 IMU 数据）                |
+| `T`  | PTLocomotion | LibTorch 推理运动（需 IMU 数据）                    |
+| `D`  | Damping      | 软件阻尼模式                                        |
+| `S`  | Stop         | 停止当前状态机（Damping 停止时自动切换到 FixStand） |
+| `Q`  | Quit         | 退出程序                                            |
 
 MuJoCo 渲染窗口额外支持：`ESC` 退出，`r` 重置仿真，`c` 重置相机。
 
@@ -113,7 +113,7 @@ zrobot_pi_ws/
 │   ├── [`rs_interface/`](src/rs_interface/README.md)        # 自定义电机控制服务（3 个 srv）
 │   ├── [`imu_data_node/`](src/imu_data_node/README.md)      # WIT 系列 IMU 串口驱动（TTL/CAN/RS485）
 │   ├── [`zrobot_bridge/`](src/zrobot_bridge/README.md)      # RobStride 电机 CAN 总线桥接（实机）
-│   ├── [`zrobot_control/`](src/zrobot_control/README.md)    # 电机控制测试客户端
+│   ├── [`zrobot_control/`](src/zrobot_control/README.md)    # cmd_vel 运动指令发布节点
 │   ├── [`zrobot_deploy/`](src/zrobot_deploy/README.md)      # FSM 运动控制 + RL 推理部署
 │   ├── [`zrobot_gz_sim/`](src/zrobot_gz_sim/README.md)      # Gazebo 仿真桥接
 │   └── [`zrobot_mj_sim/`](src/zrobot_mj_sim/README.md)      # MuJoCo 仿真桥接
@@ -136,7 +136,7 @@ zrobot_pi_ws/
 rs_interface ────┬── zrobot_bridge    （实机 CAN 驱动）
                  ├── zrobot_gz_sim    （Gazebo 仿真桥接）
                  ├── zrobot_mj_sim    （MuJoCo 仿真桥接）
-                 ├── zrobot_control   （测试客户端）
+                 ├── zrobot_control   （cmd_vel 发布节点）
                  └── zrobot_deploy    （FSM 运动控制器）
 
 imu_msg ────────── imu_data_node      （IMU 驱动节点）
@@ -144,16 +144,16 @@ imu_msg ────────── imu_data_node      （IMU 驱动节点）
 
 ### 包速览
 
-| 包名 | 类型 | 说明 |
-|------|------|------|
-| [`imu_msg`](src/imu_msg/README.md) | 接口（msg） | `ImuData` 消息：标准 IMU + 欧拉角扩展 |
-| [`rs_interface`](src/rs_interface/README.md) | 接口（srv） | 3 个电机控制服务定义 |
-| [`imu_data_node`](src/imu_data_node/README.md) | 驱动 | WIT 系列 IMU 数据采集，50Hz 双话题发布 |
-| [`zrobot_bridge`](src/zrobot_bridge/README.md) | 驱动 | CAN 总线控制 23 个 RobStride 电机，4 路 CAN |
-| [`zrobot_control`](src/zrobot_control/README.md) | 工具 | 每 5s 递增位置的服务调用示例节点 |
-| [`zrobot_deploy`](src/zrobot_deploy/README.md) | 控制 | FSM 系统：FixStand / Locomotion / PTLocomotion / Damping |
-| [`zrobot_gz_sim`](src/zrobot_gz_sim/README.md) | 仿真 | Gazebo + ros2_control + PD 力矩桥接 |
-| [`zrobot_mj_sim`](src/zrobot_mj_sim/README.md) | 仿真 | MuJoCo + GLUT 渲染 + 力矩/位置双控制模式 |
+| 包名                                             | 类型        | 说明                                                     |
+| ------------------------------------------------ | ----------- | -------------------------------------------------------- |
+| [`imu_msg`](src/imu_msg/README.md)               | 接口（msg） | `ImuData` 消息：标准 IMU + 欧拉角扩展                    |
+| [`rs_interface`](src/rs_interface/README.md)     | 接口（srv） | 3 个电机控制服务定义                                     |
+| [`imu_data_node`](src/imu_data_node/README.md)   | 驱动        | WIT 系列 IMU 数据采集，50Hz 双话题发布                   |
+| [`zrobot_bridge`](src/zrobot_bridge/README.md)   | 驱动        | CAN 总线控制 23 个 RobStride 电机，4 路 CAN              |
+| [`zrobot_control`](src/zrobot_control/README.md) | 工具        | 通过 cmd_vel 话题发布机器人运动速度指令                  |
+| [`zrobot_deploy`](src/zrobot_deploy/README.md)   | 控制        | FSM 系统：FixStand / Locomotion / PTLocomotion / Damping |
+| [`zrobot_gz_sim`](src/zrobot_gz_sim/README.md)   | 仿真        | Gazebo + ros2_control + PD 力矩桥接                      |
+| [`zrobot_mj_sim`](src/zrobot_mj_sim/README.md)   | 仿真        | MuJoCo + GLUT 渲染 + 力矩/位置双控制模式                 |
 
 ## 重要技术细节
 
@@ -161,11 +161,11 @@ imu_msg ────────── imu_data_node      （IMU 驱动节点）
 
 `zrobot_bridge`（实机）、`zrobot_gz_sim`、`zrobot_mj_sim` 三个包均提供相同的三个 ROS 2 服务：
 
-| 服务 | 请求 | 响应 |
-|------|------|------|
+| 服务                  | 请求                    | 响应                                                                         |
+| --------------------- | ----------------------- | ---------------------------------------------------------------------------- |
 | `/rob_stride_control` | `float32[23] positions` | `feedback_positions/velocities/torques/temperatures` + `success` + `message` |
-| `/get_positions` | （空） | `float32[23] feedback_positions` + `success` + `message` |
-| `/set_zeros` | （空） | `success` + `message` |
+| `/get_positions`      | （空）                  | `float32[23] feedback_positions` + `success` + `message`                     |
+| `/set_zeros`          | （空）                  | `success` + `message`                                                        |
 
 控制层（`zrobot_deploy`）通过服务名调用，无需关心底层是实机还是仿真。
 
@@ -177,10 +177,10 @@ imu_msg ────────── imu_data_node      （IMU 驱动节点）
 
 MuJoCo 仿真支持两种模式：
 
-| 模式 | 原理 | 模型文件 |
-|------|------|---------|
-| `torque_pd`（默认） | C++ PD 公式计算力矩，写入 `<motor>` 执行器 | `zrobot.xml` |
-| `position` | 直接写目标位置，MuJoCo 内置 `<position>` 伺服 | `zrobot_position.xml` |
+| 模式                | 原理                                          | 模型文件              |
+| ------------------- | --------------------------------------------- | --------------------- |
+| `torque_pd`（默认） | C++ PD 公式计算力矩，写入 `<motor>` 执行器    | `zrobot.xml`          |
+| `position`          | 直接写目标位置，MuJoCo 内置 `<position>` 伺服 | `zrobot_position.xml` |
 
 PD 公式：`tau = (target_q - current_q) * kp + (0 - current_dq) * kd`
 

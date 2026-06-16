@@ -2,48 +2,61 @@
 
 ## 概述
 
-ROS 2 控制客户端节点，周期性地调用 `/rob_stride_control` 服务向机器人发送 23 个电机位置命令，并根据反馈结果递增位置值（每周期 +1.0 rad），用于测试机器人的基本运动控制链路连通性。
+ROS 2 速度指令发布节点，周期性地向 `cmd_vel` 话题发送 `geometry_msgs/msg/Twist` 消息，控制机器人的运动方向和速度。`zrobot_deploy` 的 Locomotion 和 PTLocomotion 状态机订阅 `cmd_vel` 话题，将速度指令作为 RL 策略的观测输入，从而驱动机器人行走。
 
 ## 依赖
 
 ### ROS 2
 - `rclcpp`
-- `rs_interface`（自定义服务定义包）
+- `geometry_msgs`
 
 ## 构建
 
 ```bash
-colcon build --packages-select rs_interface zrobot_bridge zrobot_control
+colcon build --packages-select zrobot_control
 ```
-
-先构建 `rs_interface` 和 `zrobot_bridge`，再构建本包。
 
 ## 使用
 
-```bash
-# 终端 1：启动桥接服务端
-ros2 launch zrobot_bridge motor_controller.launch.py
+### 默认启动
 
-# 终端 2：启动控制客户端
-ros2 run zrobot_control rob_stride_client_node
+```bash
+ros2 run zrobot_control cmd_vel_publisher
 ```
 
-节点启动后每 5 秒向 `/rob_stride_control` 发送一次请求，首次发送全零位置，每次成功后将所有电机位置递增 1.0 rad。
+默认以 10 Hz 频率发布 `linear.x = 0.4 m/s`（直行前进）。
+
+### 使用参数文件
+
+```bash
+ros2 run zrobot_control cmd_vel_publisher --ros-args \
+    --params-file src/zrobot_control/config/cmd_vel_params.yaml
+```
+
+### 命令行覆盖参数
+
+```bash
+ros2 run zrobot_control cmd_vel_publisher --ros-args \
+    -p velocity_x:=0.8 -p angular_z:=0.5
+```
 
 ## ROS 2 接口
 
-### 调用的服务
+### 发布的话题
 
-| 服务名 | 类型 | 说明 |
-|--------|------|------|
-| `/rob_stride_control` | `rs_interface/srv/RobStrideMsgs` | 发送 23 电机位置命令并接收反馈 |
+| 话题名 | 类型 | 频率 | 说明 |
+|--------|------|------|------|
+| `cmd_vel` | `geometry_msgs/msg/Twist` | 10 Hz（可配） | 机器人运动速度指令 |
 
-### 行为说明
+### 参数
 
-- 节点名：`rob_stride_client_node`
-- 控制周期：5 秒（固定定时器）
-- 位置更新策略：`current_positions[i] = feedback_positions[i] + 1.0f`
-- 当服务不可用时打印 WARN 日志并跳过当前周期
+| 参数名 | 类型 | 默认值 | 说明 |
+|--------|------|--------|------|
+| `publish_rate` | double | 10.0 | 发布频率 (Hz) |
+| `velocity_x` | double | 0.4 | 前向速度 (m/s) |
+| `velocity_y` | double | 0.0 | 侧向速度 (m/s) |
+| `angular_z` | double | 0.0 | 偏航角速度 (rad/s) |
+| `topic_name` | string | `cmd_vel` | 目标话题名 |
 
 ## 项目结构
 
@@ -51,10 +64,8 @@ ros2 run zrobot_control rob_stride_client_node
 zrobot_control/
 ├── CMakeLists.txt
 ├── package.xml
+├── config/
+│   └── cmd_vel_params.yaml
 └── src/
-    └── rob_stride_client_node.cpp
+    └── cmd_vel_publisher.cpp
 ```
-
-## 技术细节
-
-该节点是 `zrobot_deploy` 中 FSM 控制系统的简化等价实现，不包含任何状态机或 RL 推理逻辑，仅做周期性位置发送与更新。其主要用途是验证 `zrobot_bridge` 的 `MotorControllerNode` 服务端是否正常工作。

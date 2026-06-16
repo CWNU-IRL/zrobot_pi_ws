@@ -3,14 +3,14 @@
 <package format="3">
   <name>zrobot_control</name>
   <version>0.0.0</version>
-  <description>TODO: Package description</description>
+  <description>ROS 2 node that publishes Twist commands on cmd_vel for robot locomotion control</description>
   <maintainer email="callmebill@billw.cn">root</maintainer>
   <license>Apache-2.0</license>
 
   <buildtool_depend>ament_cmake</buildtool_depend>
 
   <depend>rclcpp</depend>
-  <depend>rs_interface</depend>
+  <depend>geometry_msgs</depend>
 
   <test_depend>ament_lint_auto</test_depend>
   <test_depend>ament_lint_common</test_depend>
