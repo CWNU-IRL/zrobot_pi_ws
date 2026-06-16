@@ -25,7 +25,7 @@ private:
     
     InternalState internal_state_;
     
-    // 目标位置（机械零位，所有电机都是0）
+    // 目标位置（站立姿态）
     std::array<float, 23> target_positions_;
     
     // 初始位置

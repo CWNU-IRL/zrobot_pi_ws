@@ -10,8 +10,16 @@ FixStand::FixStand(std::shared_ptr<rclcpp::Node> node)
     , is_initialized_(false)
 {
     current_state_ = FSMState::FIX_STAND;
-    // 目标位置设为机械零位
+    // target: training standing posture (matches sim2sim default_angle)
     target_positions_.fill(0.0f);
+    // motor 0: L_hip_roll=0.0, 1: L_hip_yaw=0.0, 2: L_hip_pitch=-0.45, 3: L_knee=-0.85, 4: L_foot_pitch=0.4, 5: L_foot_roll=0.0
+    target_positions_[2] = -0.45f;
+    target_positions_[3] = -0.85f;
+    target_positions_[4] = 0.4f;
+    // motor 6: R_hip_roll=0.0, 7: R_hip_yaw=0.0, 8: R_hip_pitch=0.45, 9: R_knee=0.85, 10: R_foot_pitch=-0.4, 11: R_foot_roll=0.0
+    target_positions_[8] = 0.45f;
+    target_positions_[9] = 0.85f;
+    target_positions_[10] = -0.4f;
     initial_positions_.fill(0.0f);
     
     RCLCPP_INFO(node_->get_logger(), "FixStand FSM created");
@@ -47,7 +55,7 @@ void FixStand::initialize()
     is_initialized_ = true;
     
     RCLCPP_INFO(node_->get_logger(), 
-                "FixStand initialized, will move to target position in %.1f seconds", 
+                "FixStand initialized, will move to standing pose in %.1f seconds", 
                 interpolation_time_);
 }
 
@@ -88,13 +96,13 @@ void FixStand::run()
             // 检查是否完成移动
             if (t >= 1.0) {
                 internal_state_ = InternalState::STANDING;
-                RCLCPP_INFO(node_->get_logger(), "Reached zero position, now standing");
+                RCLCPP_INFO(node_->get_logger(), "Reached standing position, now holding");
             } else {
                 // 每秒打印一次进度
                 static double last_print_time = 0.0;
                 if (elapsed_time_ - last_print_time >= 1.0) {
                     RCLCPP_INFO(node_->get_logger(), 
-                               "Moving to zero: %.1f%% complete", 
+                               "Moving to standing pose: %.1f%% complete", 
                                t * 100.0);
                     last_print_time = elapsed_time_;
                 }
@@ -116,7 +124,7 @@ void FixStand::run()
             static double last_print_time = 0.0;
             double total_time = std::chrono::duration<double>(current_time - start_time_).count();
             if (total_time - last_print_time >= 5.0) {
-                RCLCPP_INFO(node_->get_logger(), "Standing at target position");
+                RCLCPP_INFO(node_->get_logger(), "Holding standing pose");
                 last_print_time = total_time;
             }
             break;

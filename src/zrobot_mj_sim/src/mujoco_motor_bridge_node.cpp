@@ -20,8 +20,8 @@ std::vector<double> default_kp_vec(size_t count)
 {
     std::vector<double> kp(count, 120.0);
     if (count >= 12) {
-        kp[4] = 40.0; kp[5] = 40.0;
-        kp[10] = 40.0; kp[11] = 40.0;
+        kp[4] = 80.0; kp[5] = 80.0;
+        kp[10] = 80.0; kp[11] = 80.0;
     }
     return kp;
 }
@@ -431,15 +431,15 @@ void MujocoMotorBridgeNode::control_loop()
 
     {
         std::lock_guard<std::mutex> lock(state_mutex_);
-        if (is_target_initialized_)
+        for (size_t step = 0; step < sim_substeps_; ++step)
         {
-            for (size_t step = 0; step < sim_substeps_; ++step)
+            if (is_target_initialized_)
             {
                 apply_control_locked();
-                mj_step(model_, data_);
             }
-            update_state_from_sim_locked();
+            mj_step(model_, data_);
         }
+        update_state_from_sim_locked();
 
         positions = last_positions_;
         velocities = last_velocities_;
