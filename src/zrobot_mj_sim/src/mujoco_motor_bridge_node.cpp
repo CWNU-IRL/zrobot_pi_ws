@@ -419,6 +419,11 @@ void MujocoMotorBridgeNode::control_loop()
         return;
     }
 
+    if (!is_target_initialized_)
+    {
+        return;
+    }
+
     std::array<float, kNumMotors> positions;
     std::array<float, kNumMotors> velocities;
     std::array<float, kNumMotors> efforts;
