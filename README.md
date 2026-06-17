@@ -136,7 +136,6 @@ zrobot_pi_ws/
 rs_interface ────┬── zrobot_bridge    （实机 CAN 驱动）
                  ├── zrobot_gz_sim    （Gazebo 仿真桥接）
                  ├── zrobot_mj_sim    （MuJoCo 仿真桥接）
-                 ├── zrobot_control   （cmd_vel 发布节点）
                  └── zrobot_deploy    （FSM 运动控制器）
 
 imu_msg ────────── imu_data_node      （IMU 驱动节点）
