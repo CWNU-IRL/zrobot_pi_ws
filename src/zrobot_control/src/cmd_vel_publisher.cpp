@@ -1,4 +1,5 @@
 #include <chrono>
+#include <cstdio>
 #include <iomanip>
 #include <memory>
 #include <sstream>
@@ -18,6 +19,7 @@ public:
     KeyboardTeleop()
         : Node("cmd_vel_publisher")
     {
+        tty_ = fopen("/dev/tty", "w");
         declare_parameter("publish_rate", 10.0);
         declare_parameter("topic_name", "cmd_vel");
         declare_parameter("linear_speed", 0.5);
@@ -42,22 +44,24 @@ public:
     void printHelp()
     {
         std::string sep(50, '=');
-        std::cout << "\n" << sep << "\n"
-                  << "  Keyboard Teleop\n\n"
-                  << "    W  - Forward\n"
-                  << "    S  - Backward\n"
-                  << "    A  - Left turn\n"
-                  << "    D  - Right turn\n"
-                  << "    X  - Force stop\n"
-                  << "    Q  - Quit\n\n"
-                  << "  Hold key to move, release to stop.\n"
-                  << "  Multiple keys for combined motion (e.g. W+A).\n"
-                  << sep << "\n"
-                  << "  Topic: " << get_parameter("topic_name").as_string()
-                  << ", rate: " << get_parameter("publish_rate").as_double() << " Hz\n"
-                  << "  linear_speed: " << linear_speed_ << " m/s"
-                  << ", angular_speed: " << angular_speed_ << " rad/s\n"
-                  << sep << "\n" << std::endl;
+        std::ostringstream oss;
+        oss << "\n" << sep << "\n"
+            << "  Keyboard Teleop\n\n"
+            << "    W  - Forward\n"
+            << "    S  - Backward\n"
+            << "    A  - Left turn\n"
+            << "    D  - Right turn\n"
+            << "    X  - Force stop\n"
+            << "    Q  - Quit\n\n"
+            << "  Hold key to move, release to stop.\n"
+            << "  Multiple keys for combined motion (e.g. W+A).\n"
+            << sep << "\n"
+            << "  Topic: " << get_parameter("topic_name").as_string()
+            << ", rate: " << get_parameter("publish_rate").as_double() << " Hz\n"
+            << "  linear_speed: " << linear_speed_ << " m/s"
+            << ", angular_speed: " << angular_speed_ << " rad/s\n"
+            << sep << "\n" << std::endl;
+        writeOutput(oss.str());
     }
 
     void processKeyboardInput()
@@ -117,11 +121,21 @@ public:
             << msg.linear.x
             << "  vy:" << std::setw(7) << msg.linear.y
             << "  vz:" << std::setw(7) << msg.angular.z << "]";
-        std::cout << oss.str() << std::flush;
+        writeOutput(oss.str());
     }
 
     bool shouldQuit() const { return quit_; }
     double publishRate() const { return 1.0 / publish_period_.count(); }
+
+    void writeOutput(const std::string& text)
+    {
+        if (tty_) {
+            fprintf(tty_, "%s", text.c_str());
+            fflush(tty_);
+        } else {
+            std::cout << text << std::flush;
+        }
+    }
 
 private:
     rclcpp::Publisher<geometry_msgs::msg::Twist>::SharedPtr pub_;
@@ -141,6 +155,8 @@ private:
     double last_linear_x_ = -1.0;
     double last_linear_y_ = -1.0;
     double last_angular_z_ = -1.0;
+
+    FILE *tty_ = nullptr;
 };
 
 int main(int argc, char **argv)
@@ -168,7 +184,7 @@ int main(int argc, char **argv)
     tcsetattr(STDIN_FILENO, TCSANOW, &orig_term);
     fcntl(STDIN_FILENO, F_SETFL, old_flags);
 
-    std::cout << "\n";
+    node->writeOutput("\n");
     rclcpp::shutdown();
     return 0;
 }
