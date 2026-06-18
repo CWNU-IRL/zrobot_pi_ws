@@ -2,84 +2,73 @@
 
 ## 概述
 
-ROS 2 C++ 运动控制系统，基于有限状态机（FSM）控制 zrobot 机器人。支持四种运行模式：FixStand（固定站立）、Locomotion（ONNX 推理运动）、PTLocomotion（LibTorch 推理运动）、Damping（软件阻尼仿真）。所有模式均通过 `/rob_stride_control` 服务向底层电机驱动发送 23 个关节的位置命令，控制频率 100 Hz。
+ZRobot 的核心运动控制部署包。实现基于有限状态机的运动控制器框架，包含 4 种可切换的状态机：`FixStand`（固定站立）、`Locomotion`（ONNX 模型推理）、`PTLocomotion`（TorchScript 模型推理）和 `Damping`（虚拟阻尼）。通过 `rs_interface` 的统一服务接口与底层电机桥接通信，支持实机与仿真无缝切换。
 
 ## 依赖
 
 ### 系统依赖
-- ONNX Runtime（`onnxruntime-linux-aarch64-1.16.3` 或 `onnxruntime-linux-x64-1.16.3`）
-- LibTorch（与系统架构匹配的 PyTorch C++ 库）
-- Eigen3
+
+- `libeigen3-dev`（Eigen 线性代数库）
+
+### 第三方预编译库
+
+- ONNX Runtime 1.16.3（`Locomotion` 状态机使用）
+- LibTorch 2.12+cpu（`PTLocomotion` 状态机使用）
 
 ### ROS 2
+
 - `rclcpp`
-- `rs_interface`（自定义服务定义包）
+- `rs_interface`
 - `std_msgs`
 - `sensor_msgs`
 - `geometry_msgs`
 - `tf2`
 
-### 策略模型文件
-
-放置在工作区 `resources/policy/` 目录下（默认路径编译时由 `POLICY_DIR` 宏定义）：
-
-```
-resources/policy/
-├── policy.onnx          # Locomotion 使用的 ONNX 模型
-└── policy_1.pt          # PTLocomotion 使用的 TorchScript 模型
-```
-
 ## 构建
 
 ```bash
-# 首次需要在工作区根目录放置 ONNX Runtime 和 LibTorch
-# 目录结构参考 CMakeLists.txt 中的路径配置
 colcon build --packages-select rs_interface zrobot_deploy
 ```
 
 ## 使用
 
-```bash
-# 启动底层电机桥接节点
-ros2 launch zrobot_bridge motor_controller.launch.py
+### 启动
 
-# 另一终端启动 FSM 控制器
+```bash
+# 先启动底层桥接（实机、Gazebo 或 MuJoCo），再启动 FSM 控制器
 ros2 run zrobot_deploy main
 ```
 
 ### 键盘控制
 
-| 按键 | 功能 |
-|------|------|
-| `F` | 启动 FixStand（移动到机械零位并保持站立） |
-| `L` | 启动 Locomotion（ONNX 推理运动） |
-| `T` | 启动 PTLocomotion（TorchScript 推理运动） |
-| `D` | 启动 Damping（软件阻尼） |
-| `S` | 停止当前状态机 |
-| `Q` | 退出程序 |
+启动后在终端按键切换状态机：
 
-### 注意事项
+| 按键 | 模式         | 说明                                              |
+| ---- | ------------ | ------------------------------------------------- |
+| `F`  | FixStand     | 3 秒线性插值到站立姿态并保持                      |
+| `L`  | Locomotion   | ONNX Runtime 推理运动（需 IMU 数据）              |
+| `T`  | PTLocomotion | LibTorch 推理运动（需 IMU 数据）                  |
+| `D`  | Damping      | 软件阻尼模式                                      |
+| `S`  | Stop         | 停止当前状态机（Damping 停止后自动恢复 FixStand） |
+| `Q`  | Quit         | 退出程序                                          |
 
-- FixStand 使用 3 秒线性插值将机器人从当前位置移动到零位，避免突然动作
-- 启动 Locomotion 前确保 IMU 节点已运行（订阅 `/imu/data`）
-- 可在 `cmd_vel` 话题上发布速度指令控制机器人前进/转向
-- 停止 Damping 时会自动切换到 FixStand，防止机器人失电瘫倒
+主循环运行在 **100 Hz**，键盘检测非阻塞，ROS 回调通过 `rclcpp::spin_some()` 异步处理。
 
 ## ROS 2 接口
 
-### 调用的服务
-
-| 服务名 | 类型 | 说明 |
-|--------|------|------|
-| `/rob_stride_control` | `rs_interface/srv/RobStrideMsgs` | 发送 23 电机位置命令（100 Hz） |
-| `/get_positions` | `rs_interface/srv/GetPositions` | 读取当前电机位置（初始化时使用） |
-
 ### 订阅的话题
 
-| 话题名 | 类型 | 用途 |
-|--------|------|------|
-| `/imu/data` | `sensor_msgs/msg/Imu` | Locomotion/PTLocomotion 观测输入（角速度、姿态角） |
-| `cmd_vel` | `geometry_msgs/msg/Twist` | 运动速度指令（vx, vy, wz） |
+| 话题名      | 类型                      | 说明                                           |
+| ----------- | ------------------------- | ---------------------------------------------- |
+| `/imu/data` | `sensor_msgs/msg/Imu`     | IMU 数据（Locomotion / PTLocomotion 使用）     |
+| `cmd_vel`   | `geometry_msgs/msg/Twist` | 遥控速度指令（Locomotion / PTLocomotion 使用） |
+
+### 调用的服务
+
+| 服务名                | 服务类型                         | 说明                   |
+| --------------------- | -------------------------------- | ---------------------- |
+| `/rob_stride_control` | `rs_interface/srv/RobStrideMsgs` | 发送 23 个电机位置指令 |
+| `/get_positions`      | `rs_interface/srv/GetPositions`  | 读取当前电机位置       |
 
 ## 项目结构
 
@@ -88,74 +77,92 @@ zrobot_deploy/
 ├── CMakeLists.txt
 ├── package.xml
 ├── include/zrobot_deploy/
-│   ├── FSM.h               # FSM 抽象基类
-│   ├── FixStand.h          # 固定站立状态机
-│   ├── Locomotion.h        # ONNX 推理运动状态机
-│   ├── PTLocomotion.h      # TorchScript 推理运动状态机
-│   └── Damping.h           # 软件阻尼状态机
+│   ├── FSM.h              # 状态机基类
+│   ├── FixStand.h         # 固定站立状态
+│   ├── Locomotion.h       # ONNX 推理运动状态
+│   ├── PTLocomotion.h     # TorchScript 推理运动状态
+│   └── Damping.h          # 虚拟阻尼状态
 └── src/
-    ├── FSM.cpp             # 基类实现（服务调用、反馈缓存）
-    ├── FixStand.cpp        # 站立：3s 线性插值到零位
-    ├── Locomotion.cpp      # ONNX 推理控制循环
-    ├── PTLocomotion.cpp    # TorchScript 推理控制循环
-    ├── Damping.cpp         # 阻尼：q_cmd = q_fb - kd * dq_fb
-    └── main.cpp            # 入口：键盘控制 + 100Hz 主循环
+    ├── main.cpp            # FSM 控制器入口 + 键盘交互
+    ├── FSM.cpp             # 基类实现（服务调用封装）
+    ├── FixStand.cpp        # 站立姿态插值
+    ├── Locomotion.cpp      # ONNX 模型加载 + 推理循环
+    ├── PTLocomotion.cpp    # TorchScript 模型加载 + 推理循环
+    └── Damping.cpp         # 虚拟阻尼计算
 ```
 
 ## 技术细节
 
-### FSM 基类
+### FSM 架构
 
-每个状态机继承自 `FSM`，实现三个虚函数：
+```
+                    +------------+
+                    |   IDLE     |
+                    +-----+------+
+                          |
+          +---------------+---------------+
+          |               |               |
+          v               v               v
+    +----------+   +-----------+   +----------+
+    | FixStand |   | Locomotion|   | Damping  |
+    +----------+   | (ONNX)    |   +----------+
+                   +-----------+
+                   | PTLocomot.|
+                   | (.pt)     |
+                   +-----------+
+```
 
-| 方法 | 调用时机 | 用途 |
-|------|---------|------|
-| `initialize()` | 切换到该状态时 | 初始化参数、订阅话题、启动线程 |
-| `run()` | 每 10ms（100 Hz） | 计算并发送电机位置 |
-| `exit()` | 离开该状态时 | 清理资源、停止线程 |
+所有状态机继承自 `FSM` 基类，基类封装了：
+- 两个服务客户端（`/rob_stride_control`, `/get_positions`）
+- `sendMotorPositions()` — 发送 23 电机位置（100 ms 超时）
+- `getMotorFeedback()` — 读取缓存反馈
+- `getCurrentPositions()` — 通过服务读取位置（最长 5 s 超时）
 
-### FixStand
+### FixStand（固定站立）
 
-3 个内部状态：`INIT` → `MOVING`（3 秒线性插值）→ `STANDING`（保持零位）
-
-插值公式：`current[i] = initial[i] + t * (0 - initial[i])`，其中 `t = min(elapsed / 3.0, 1.0)`
+- 3 秒线性插值：`q_target = q_current + (q_stand - q_current) * t / 3.0`
+- 站立姿态（12 个腿部关节）：
+  - 左腿：hip_pitch = -0.45, knee = -0.85, foot_pitch = 0.4
+  - 右腿：hip_pitch = 0.45, knee = 0.85, foot_pitch = -0.4
+  - hip_roll / hip_yaw / foot_roll 归零
+- 插值完成后持续保持站立位置
 
 ### Locomotion（ONNX 推理）
 
-47 维观测向量：
+- 使用 ONNX Runtime C++ API 加载 `resources/policy/policy.onnx`
+- **观测空间**：47 维单帧，经过 `frame_stack_`（默认 15）帧堆叠后输入维度为 705
 
-| 索引 | 维度 | 数据 |
-|------|------|------|
-| 0-1 | 2 | 步态相位 sin/cos（周期 0.64s） |
-| 2-4 | 3 | 指令速度 vx/vy/wz（缩放后） |
-| 5-16 | 12 | 关节位置（相对默认姿态） |
-| 17-28 | 12 | 关节速度 |
-| 29-40 | 12 | 前一步动作 |
-| 41-43 | 3 | IMU 角速度 |
-| 44-46 | 3 | IMU 欧拉角 |
+| 观测分量   | 维度 | 说明                                         |
+| ---------- | ---- | -------------------------------------------- |
+| 步态相位   | 2    | sin(phase), cos(phase)，周期 `phase_period_` |
+| 指令速度   | 3    | vx, vy, ωz，来自 `cmd_vel`                   |
+| 关节位置   | 12   | 12 个腿部关节当前角度                        |
+| 关节速度   | 12   | 12 个腿部关节当前速度                        |
+| 上一帧动作 | 12   | 上一控制周期的策略输出                       |
+| IMU 角速度 | 3    | 机体角速度 (rad/s)                           |
+| IMU 欧拉角 | 3    | Roll, Pitch, Yaw (rad)                       |
 
-策略输出 12 维动作（腿部 12 个关节的增量位置），通过 `dof_indices_` 映射到 23 个电机索引。动作经过限幅安全保护（`action_abs_limit_`、`action_delta_limit_`），观测使用 15 帧堆叠输入。
+- **动作空间**：12 维关节位置增量，通过 `dof_indices_` 映射到 23 电机数组
+- **控制参数**：`dt = 0.01`、`action_scale = 0.25`、`obs_clip = 18`、`act_clip = 18`
+- **推理线程**：独立 `std::thread` 运行 `inferenceLoop()`，100 Hz 推理
+- **主线程**：100 Hz 发送电机指令，读写锁保护动作缓冲区
+- 启动后等待 IMU 数据（最长 3 秒），确保观测完整性
 
-推理在独立线程中以 100 Hz 运行，主线程仅读取最新推理结果并发送位置命令。
+### PTLocomotion（TorchScript 推理）
 
-### PTLocomotion（LibTorch 推理）
+- 使用 LibTorch `torch::jit::load()` 加载 `resources/policy/policy_1.pt`
+- 观测空间、动作空间、控制逻辑与 `Locomotion` 相同
+- 使用 `torch::NoGradGuard()` 确保推理时不计算梯度
 
-结构和逻辑与 Locomotion 完全一致，区别在于使用 `torch::jit::load()` 加载 `.pt` 模型进行推理。
+### Damping（虚拟阻尼）
 
-### Damping（软件阻尼）
+- 用于机器人倒地等非正常状态下的安全保护
+- 计算公式：`q_cmd = q_fb - kd * dq_fb`
+- 可配置参数：`kd_default = 0.08`、`velocity_deadband = 0.02`、`max_position_delta = 0.15`、每关节独立 kd 数组
+- 首次调用时将当前位置作为历史值缓存
 
-模拟弹簧阻尼效果：`q_cmd = q_fb - kd * dq_fb`，通过位置控制实现近似阻尼行为。
+### 构建说明
 
-- 默认 `kd_default_` = 0.08
-- 死区 `velocity_deadband_` = 0.02 rad/s（低于此不做阻尼）
-- 最大位置变化 `max_position_delta_` = 0.15 rad/步（安全限幅）
-
-### 主循环
-
-`main.cpp` 使用 raw terminal（`termios`）实现非阻塞键盘检测，100 Hz 控制循环中依次执行：
-
-```
-if 有按键: 切换/停止状态机
-if 有当前 FSM: current_fsm->run()
-rclcpp::spin_some(node)  # 处理话题回调
-```
+`CMakeLists.txt` 自动检测架构：
+- **aarch64（树莓派等）**：LibTorch 从系统 Python 包中获取，ONNX Runtime 从 `third_party/onnxruntime-linux-aarch64-1.16.3/`
+- **x86_64（PC）**：LibTorch 从 `third_party/libtorch/`，ONNX Runtime 从 `third_party/onnxruntime-linux-x64-1.16.3/`

@@ -2,23 +2,35 @@
 
 ## 概述
 
-zrobot 双足机器人的 Gazebo 仿真包。提供完整的仿真环境，包含机器人 URDF 模型、ros2_control 集成、以及 `GazeboMotorBridgeNode` 桥接节点。该节点将 `zrobot_deploy` 等上层控制节点的位置指令转换为 PD 力矩控制命令，通过 `forward_command_controller` 驱动 12 个腿部关节。暴露的服务接口与 `zrobot_bridge`（实机 CAN 驱动）完全一致，实现仿真与实机的无缝切换。
+ZRobot 的 Gazebo 仿真桥接包。实现 `rs_interface` 的三个服务接口，连接 Gazebo 仿真环境中通过 `ros2_control` 和 `joint_group_effort_controller` 控制的机器人模型。在 200 Hz 控制循环中通过 PD 公式将位置目标转换为力矩指令，输出到仿真关节。
+
+包含完整的 URDF 机器人模型（含 12 个驱动关节、24 个 STL 碰撞 / 视觉网格）和 Gazebo 启动配置。
 
 ## 依赖
 
 ### ROS 2
+
 - `rclcpp`
+- `rs_interface`（自定义服务接口）
 - `sensor_msgs`
 - `std_msgs`
-- `rs_interface`（自定义服务定义包）
-
-### 运行时依赖
 - `controller_manager`
-- `gz_ros2_control`
+- `gz_ros2_control`（Gazebo - ROS 2 控制桥接）
+- `ros_gz_bridge`（Gazebo - ROS 2 话题桥接）
 - `robot_state_publisher`
-- `ros_gz_bridge`
-- `ros_gz_sim`
 - `xacro`
+
+### 安装
+
+```bash
+# Jazzy
+sudo apt install ros-jazzy-ros-gz-sim ros-jazzy-ros-gz-bridge \
+    ros-jazzy-gz-ros2-control ros-jazzy-ros2controllers
+
+# Humble
+sudo apt install ros-humble-ros-gz-sim ros-humble-ros-gz-bridge \
+    ros-humble-gz-ros2-control ros-humble-ros2controllers
+```
 
 ## 构建
 
@@ -29,60 +41,45 @@ colcon build --packages-select rs_interface zrobot_gz_sim
 ## 使用
 
 ```bash
-# 启动 Gazebo 仿真环境
-ros2 launch zrobot_gz_sim sim_bringup.launch.py
-```
-
-启动后：
-1. Gazebo 加载 empty world
-2. 机器人以 1.05m 高度生成在地面上
-3. `robot_state_publisher` 发布机器人 TF 和关节状态
-4. `GazeboMotorBridgeNode` 启动，等待控制服务请求
-5. 若 `controller_manager` 可用，自动加载 `joint_state_broadcaster` 和 `joint_group_effort_controller`
-
-### 测试控制
-
-```bash
-# 发送站立指令（全零位置）
-ros2 service call /rob_stride_control rs_interface/srv/RobStrideMsgs \
-  "{positions: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]}"
-
-# 读取关节位置
-ros2 service call /get_positions rs_interface/srv/GetPositions
-```
-
-结合 `zrobot_deploy` 运行完整运动控制：
-
-```bash
-# 终端 1：仿真
 ros2 launch zrobot_gz_sim sim_bringup.launch.py
 
-# 终端 2：FSM 控制器
+# 另一终端启动 FSM 控制器
+source install/setup.bash
 ros2 run zrobot_deploy main
 ```
+
+### 启动文件说明
+
+`sim_bringup.launch.py` 按顺序启动：
+
+1. Gazebo 仿真器（空世界，`empty.sdf`）
+2. `robot_state_publisher`（发布 URDF 的 TF 树）
+3. 机器人加载到 Gazebo（通过 `spawn_entity.py`）
+4. 控制器管理器加载（`joint_state_broadcaster`, `joint_group_effort_controller`）
+5. ROS-Gazebo 桥接（`/clock`, `/imu/data` 等话题）
+6. `gazebo_motor_bridge_node`（本包的核心节点）
 
 ## ROS 2 接口
 
 ### 提供的服务
 
-| 服务名 | 类型 | 说明 |
-|--------|------|------|
-| `/rob_stride_control` | `rs_interface/srv/RobStrideMsgs` | 发送 23 关节位置命令，PD 计算力矩 |
-| `/get_positions` | `rs_interface/srv/GetPositions` | 读取当前关节位置 |
-| `/set_zeros` | `rs_interface/srv/SetZeros` | 设置零位偏移 |
+| 服务名                | 服务类型                         | 说明                                    |
+| --------------------- | -------------------------------- | --------------------------------------- |
+| `/rob_stride_control` | `rs_interface/srv/RobStrideMsgs` | 接收位置目标，PD 计算力矩发送到仿真关节 |
+| `/get_positions`      | `rs_interface/srv/GetPositions`  | 读取仿真关节当前位置                    |
+| `/set_zeros`          | `rs_interface/srv/SetZeros`      | 当前仿真位置归零校准                    |
 
-### 桥接话题
+### 订阅的话题
 
-| 话题名 | 类型 | 方向 | 说明 |
-|--------|------|------|------|
-| `/clock` | `rosgraph_msgs/msg/Clock` | Gazebo → ROS | 仿真时间 |
-| `/imu/data` | `sensor_msgs/msg/Imu` | Gazebo → ROS | IMU 数据 |
+| 话题名          | 类型                         | 说明                            |
+| --------------- | ---------------------------- | ------------------------------- |
+| `/joint_states` | `sensor_msgs/msg/JointState` | Gazebo 发布的关节状态（200 Hz） |
 
 ### 发布的话题
 
-| 话题名 | 类型 | 说明 |
-|--------|------|------|
-| `/joint_group_effort_controller/commands` | `std_msgs/Float64MultiArray` | 12 关节力矩命令（PD 输出） |
+| 话题名                                    | 类型                             | 说明                         |
+| ----------------------------------------- | -------------------------------- | ---------------------------- |
+| `/joint_group_effort_controller/commands` | `std_msgs/msg/Float64MultiArray` | PD 计算后的力矩指令（12 维） |
 
 ## 项目结构
 
@@ -91,65 +88,62 @@ zrobot_gz_sim/
 ├── CMakeLists.txt
 ├── package.xml
 ├── config/
-│   ├── bridge_params.yaml       # GazeboMotorBridgeNode 参数（关节名、Kp/Kd、模拟温度）
-│   └── controllers.yaml         # ros2_control 控制器配置（200 Hz）
+│   ├── controllers.yaml          # 控制器配置
+│   └── bridge_params.yaml        # 桥接节点参数
+├── launch/
+│   └── sim_bringup.launch.py     # 完整仿真启动
+├── worlds/
+│   └── empty.sdf                 # 空仿真世界
+├── resources/zrobot/
+│   ├── urdf/
+│   │   ├── zrobot.urdf           # URDF 模型（1410 行）
+│   │   └── zrobot.csv            # 惯性参数
+│   ├── mjcf/
+│   │   └── zrobot.xml            # MuJoCo 兼容 MJCF
+│   └── meshes/
+│       ├── *.STL                 # 24 个网格文件
+│       └── zrobot.urdf / .xml    # 渲染模型引用
 ├── include/zrobot_gz_sim/
 │   └── gazebo_motor_bridge_node.hpp
-├── launch/
-│   └── sim_bringup.launch.py    # 主启动文件
-├── src/
-│   └── gazebo_motor_bridge_node.cpp
-├── worlds/
-│   └── empty.sdf                # 空世界（含物理参数、IMU 传感器、光照）
-└── resources/zrobot/
-    ├── meshes/
-    │   ├── *.STL                # 22 个 STL 网格文件（SolidWorks 导出）
-    │   └── zrobot.urdf          # 原始 23 自由度 URDF（所有关节 revolue）
-    └── urdf/
-        ├── zrobot.urdf          # Gazebo 适配 URDF（12 驱动关节 + 固定上肢 + IMU + 浮动基座）
-        └── zrobot.csv           # SolidWorks 导出参数表
+└── src/
+    └── gazebo_motor_bridge_node.cpp
 ```
+
+## 配置
+
+### bridge_params.yaml
+
+| 参数                   | 类型       | 默认值        | 说明                 |
+| ---------------------- | ---------- | ------------- | -------------------- |
+| `joint_names`          | string[12] | 12 个腿部关节 | 受控关节列表         |
+| `kp`                   | double[12] | 见 YAML       | 12 个关节的 PD Kp 值 |
+| `kd`                   | double[12] | 见 YAML       | 12 个关节的 PD Kd 值 |
+| `feedback_temperature` | float      | 35.0          | 仿真反馈温度（常量） |
+
+### controllers.yaml
+
+| 控制器                          | 类型                       | 说明                           |
+| ------------------------------- | -------------------------- | ------------------------------ |
+| `joint_state_broadcaster`       | `JointStateBroadcaster`    | 发布关节状态到 `/joint_states` |
+| `joint_group_effort_controller` | `ForwardCommandController` | 接收力矩指令，应用到仿真关节   |
 
 ## 技术细节
 
-### 机器人模型
-
-- **总质量**：~24.5 kg
-- **生成高度**：1.05 m（浮动基座）
-- **驱动关节**：12 个（左右腿各 6 个，hip_roll/yaw/pitch + knee + foot_pitch/roll）
-- **固定关节**：上肢 5 个（chest_head、shoulder_pitch/roll、arm_yaw、elbow_pitch）
-- **IMU**：固定在 `base_link` 上，200 Hz 发布，带高斯噪声
-
-### PD 控制器
+### PD 控制
 
 ```
 tau = (target_q - current_q) * kp + (0 - current_dq) * kd
 ```
 
-默认增益（`config/bridge_params.yaml`）：
+不包含目标速度项（target_dq 始终为 0），因为 `zrobot_deploy` 发送的是位置目标而非轨迹。
 
-| 关节组 | Kp | Kd |
-|--------|----|----|
-| hip_roll/yaw | 40.0 | 2.0 |
-| hip_pitch/knee | 60.0 | 3.0 |
-| foot_pitch/roll | 10.0 | 1.0 |
+### 200 Hz 控制保持
 
-### 23 vs 12 关节
+桥接节点内部以 200 Hz 定时器运行 `control_loop()`，在没有新服务请求时将上一帧的目标位置持续写到仿真关节。这确保 `rs_interface` 服务端接收位置目标后，即使 `zrobot_deploy` 切换到不同状态机，仿真关节也不会掉回零位。
 
-桥接节点声明 `kNumMotors = 23`，但 URDF 中仅 12 个驱动关节。**前 12 个**位置索引对应实际腿部驱动关节（6L + 6R），索引 12-22 的位置值被记录但不发送到控制器。代码通过 `active_joint_count_` 处理这种情况，仅对实际存在的关节执行 PD 控制。
+### URDF 模型
 
-### 控制循环
-
-200 Hz 定时器持续保持目标位置。即使没有新的服务请求，节点也会以最近一次的目标位置持续下发 PD 力矩，确保机器人维持站立。
-
-### 启动流程
-
-```
-sim_bringup.launch.py
-├── Gazebo（empty.sdf）
-├── robot_state_publisher（zrobot.urdf）
-├── Spawn Entity（z=1.05m）
-├── ros_gz_bridge（/clock, /imu/data）
-└── GazeboMotorBridgeNode
-    └── [可选] controller_manager → joint_state_broadcaster → joint_group_effort_controller
-```
+- **浮动基座**（6-DOF）通过 `gz_ros2_control/GazeboSimSystem` 硬件接口连接
+- **12 个驱动关节**：左右各 6（hip_roll, hip_yaw, hip_pitch, knee, foot_pitch, foot_roll）
+- **固定关节**：双臂、胸部、头部固定在 T-pose
+- **24 个 STL 网格**：碰撞和视觉使用同一网格，路径通过 `package://zrobot_gz_sim/...` 引用
