@@ -1,5 +1,7 @@
 #include <chrono>
+#include <iomanip>
 #include <memory>
+#include <sstream>
 
 #include <fcntl.h>
 #include <termios.h>
@@ -95,6 +97,27 @@ public:
         if (a_active_)  msg.angular.z =  angular_speed_;
         if (d_active_)  msg.angular.z = -angular_speed_;
         pub_->publish(msg);
+        displayStatus(msg);
+    }
+
+    void displayStatus(const geometry_msgs::msg::Twist& msg)
+    {
+        if (msg.linear.x == last_linear_x_ &&
+            msg.linear.y == last_linear_y_ &&
+            msg.angular.z == last_angular_z_) {
+            return;
+        }
+        last_linear_x_ = msg.linear.x;
+        last_linear_y_ = msg.linear.y;
+        last_angular_z_ = msg.angular.z;
+
+        std::ostringstream oss;
+        oss << "\033[2K\r"
+            << "[vx:" << std::setw(7) << std::fixed << std::setprecision(3)
+            << msg.linear.x
+            << "  vy:" << std::setw(7) << msg.linear.y
+            << "  vz:" << std::setw(7) << msg.angular.z << "]";
+        std::cout << oss.str() << std::flush;
     }
 
     bool shouldQuit() const { return quit_; }
@@ -114,6 +137,10 @@ private:
     bool d_active_ = false;
     bool quit_ = false;
     rclcpp::Time last_key_time_ = rclcpp::Time(0, 0, RCL_ROS_TIME);
+
+    double last_linear_x_ = -1.0;
+    double last_linear_y_ = -1.0;
+    double last_angular_z_ = -1.0;
 };
 
 int main(int argc, char **argv)
@@ -141,6 +168,7 @@ int main(int argc, char **argv)
     tcsetattr(STDIN_FILENO, TCSANOW, &orig_term);
     fcntl(STDIN_FILENO, F_SETFL, old_flags);
 
+    std::cout << "\n";
     rclcpp::shutdown();
     return 0;
 }
