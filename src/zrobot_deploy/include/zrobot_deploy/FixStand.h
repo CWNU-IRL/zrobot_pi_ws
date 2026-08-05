@@ -2,6 +2,7 @@
 #define ZROBOT_DEPLOY_FIXSTAND_H
 
 #include "zrobot_deploy/FSM.h"
+#include "zrobot_deploy/paralleljoint_z1.h"
 #include <chrono>
 
 // FixStand
@@ -30,6 +31,9 @@ private:
     
     // 初始位置
     std::array<float, 23> initial_positions_;
+    
+    // 踝关节并联机构 IK（与 Locomotion 相同约定）
+    ParallelAnkle ankle_ik_;
     
     // 插值参数
     double interpolation_time_;     // 插值总时间（秒）

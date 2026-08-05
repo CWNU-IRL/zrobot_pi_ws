@@ -113,7 +113,7 @@ static const std::map<ActuatorType, ActuatorOperation> ACTUATOR_OPERATION_MAPPIN
     {ActuatorType::ROBSTRIDE_00, {4 * M_PI, 50, 17, 500.0, 5.0,}},
     {ActuatorType::ROBSTRIDE_01, {4 * M_PI, 44, 17, 500.0, 5.0,}},
     {ActuatorType::ROBSTRIDE_02, {4 * M_PI, 44, 17, 500.0, 5.0,}},
-    {ActuatorType::ROBSTRIDE_03, {4 * M_PI, 50, 60, 5000.0, 100.0,}},
+    {ActuatorType::ROBSTRIDE_03, {4 * M_PI, 20, 60, 5000.0, 100.0,}},
     {ActuatorType::ROBSTRIDE_04, {4 * M_PI, 15, 120, 5000.0, 100.0,}},
     {ActuatorType::ROBSTRIDE_05, {4 * M_PI, 33, 17, 500.0, 5.0,}},
     {ActuatorType::ROBSTRIDE_06, {4 * M_PI, 20, 60, 5000.0, 100.0,}},

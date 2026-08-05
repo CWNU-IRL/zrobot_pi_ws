@@ -273,6 +273,9 @@ void MotorControllerNode::handle_rob_stride_service(
 
             float target_position = request->positions[i];
 
+            // TODO Motor Angle 
+            // if (i == ) {target_position = -target_position}
+
             try
             {
                 // CSP模式指令
@@ -299,7 +302,8 @@ void MotorControllerNode::handle_rob_stride_service(
                     motor_kps_[i],            // kp
                     motor_kds_[i]             // kd
                 );
-
+                // TODO
+                // if (i == ) {feedback_positions = -feedback_positions}
                 // 存储反馈数据
                 response->feedback_positions[i] = pos;
                 response->feedback_velocities[i] = vel;
@@ -433,6 +437,9 @@ void MotorControllerNode::handle_get_positions_service(
         try
         {
             auto [pos, vel, torq, temp] = motors_[i]->enable_motor();
+
+            // TODO Motor Angle
+
             response->feedback_positions[i] = pos;
 
             RCLCPP_INFO(logger_, "电机%d当前位置: %.3f rad", i, pos);

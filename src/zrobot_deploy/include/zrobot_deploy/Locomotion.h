@@ -2,6 +2,7 @@
 #define ZROBOT_DEPLOY_LOCOMOTION_H
 
 #include "zrobot_deploy/FSM.h"
+#include "zrobot_deploy/paralleljoint_z1.h"
 #include <sensor_msgs/msg/imu.hpp>
 #include <geometry_msgs/msg/twist.hpp>
 #include <onnxruntime_cxx_api.h>
@@ -53,7 +54,8 @@ private:
     Eigen::VectorXf act_scaled_;      // 缩放后的动作增量 (12维)
     Eigen::VectorXf act_temp_;        // 临时动作缓冲（用于线程安全复制）
     Eigen::VectorXf default_pose_;    // 默认姿态 (12维)
-    std::array<int, NUM_ACTIONS> dof_indices_;  // 12维策略动作映射到23维电机索引
+    std::array<int, NUM_ACTIONS> dof_indices_;   // 12维策略动作映射到23维电机索引
+    std::array<float, NUM_ACTIONS> joint_signs_; // 每个关节动作的符号翻转 (±1.0)，用于匹配仿真→实物方向
     
     // ===== ROS 话题订阅相关 =====
     rclcpp::Subscription<sensor_msgs::msg::Imu>::SharedPtr imu_sub_;
@@ -79,7 +81,6 @@ private:
      bool enable_action_safety_;
      double startup_hold_seconds_;
      float action_delta_limit_;
-     float action_abs_limit_;
      std::chrono::steady_clock::time_point init_time_;
     
     // ===== 控制参数 =====
@@ -87,7 +88,7 @@ private:
     double phase_period_;                         // 相位周期 (秒)
     int frame_stack_;                             // 观测堆叠帧数
     int model_obs_dim_;                           // 模型输入维度
-    float action_scale_;                          // 动作缩放
+    std::array<float, NUM_ACTIONS> action_scale_;  // 逐关节动作缩放（与训练配置对齐）
     float obs_clip_;                              // 观测裁剪
     float act_clip_;                              // 动作裁剪
     float obs_scale_lin_vel_;                     // cmd线速度缩放
@@ -97,11 +98,33 @@ private:
     int counter_;                                 // 循环计数器（用于相位计算）
     bool model_ready_;                            // 模型是否可推理
 
+    // 踝关节并联机构 IK
+    ParallelAnkle ankle_ik_;
+    float prev_L_pitch_ = 0.3f;   // FK 迭代初值：左脚 IK-pitch（对应策略索引4, default 0.3）
+    float prev_L_roll_  = 0.0f;   // FK 迭代初值：左脚 IK-roll （对应策略索引5, default 0.0）
+    float prev_R_pitch_ = 0.3f;   // FK 迭代初值：右脚机构 IK-pitch（非镜像机构, default 机构侧 +0.3）
+    float prev_R_roll_  = 0.0f;   // FK 迭代初值：右脚机构 IK-roll （对应策略索引11, default 0.0）
+    
+    // 12维动作中踝关节 pitch/roll 的索引
+    // static constexpr int IDX_L_FOOT_PITCH = 4;
+    // static constexpr int IDX_L_FOOT_ROLL  = 5;
+    // static constexpr int IDX_R_FOOT_PITCH = 10;
+    // static constexpr int IDX_R_FOOT_ROLL  = 11;
+    static constexpr int IDX_L_FOOT_PITCH = 4;
+    static constexpr int IDX_L_FOOT_ROLL  = 5;
+    static constexpr int IDX_R_FOOT_PITCH = 10;
+    static constexpr int IDX_R_FOOT_ROLL  = 11;
+
     // 加载 ONNX 模型
     void loadPolicy(const std::string& model_path);
     
     // 推理线程函数
     void inferenceLoop();
+    
+    // 通过踝关节 IK 设置踝关节电机位置
+    // 机构方向翻转由 joint_signs_ 统一处理（右踝非镜像结构: joint_signs_[10] = -1）
+    void applyAnkleIK(std::array<float, 23>& positions,
+                      int policy_idx_pitch, int policy_idx_roll);
     
     // ROS 回调函数
     void imuCallback(const sensor_msgs::msg::Imu::SharedPtr msg);
