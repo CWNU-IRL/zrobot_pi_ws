@@ -1,18 +1,24 @@
 gazebo_motor_bridge_node:
   ros__parameters:
+    # 关节顺序 = 部署层电机 id 顺序（与 zrobot_deploy 的 dof_indices_ 约定一致）:
+    #   motor 0=L_foot_pitch, 1=L_foot_roll, 2=L_knee, 3=L_hip_pitch,
+    #   4=L_hip_yaw, 5=L_hip_roll, 6=R_foot_pitch, 7=R_foot_roll,
+    #   8=R_knee, 9=R_hip_pitch, 10=R_hip_yaw, 11=R_hip_roll
     joint_names:
-      - L_hip_roll_joint
-      - L_hip_yaw_joint
-      - L_hip_pitch_joint
-      - L_knee_joint
       - L_foot_pitch_joint
       - L_foot_roll_joint
-      - R_hip_roll_joint
-      - R_hip_yaw_joint
-      - R_hip_pitch_joint
-      - R_knee_joint
+      - L_knee_joint
+      - L_hip_pitch_joint
+      - L_hip_yaw_joint
+      - L_hip_roll_joint
       - R_foot_pitch_joint
       - R_foot_roll_joint
-    kp: [40.0, 40.0, 60.0, 60.0, 10.0, 10.0, 40.0, 40.0, 60.0, 60.0, 10.0, 10.0]
-    kd: [3.0, 3.0, 4.0, 4.0, 2.0, 2.0, 3.0, 3.0, 4.0, 4.0, 2.0, 2.0]
+      - R_knee_joint
+      - R_hip_pitch_joint
+      - R_hip_yaw_joint
+      - R_hip_roll_joint
+    # PD 增益与训练一致 (zrobot_config.py control):
+    #   hip_roll: kp=200 kd=3, hip_pitch/yaw: kp=120 kd=1, knee: kp=180 kd=3, foot: kp=80 kd=1
+    kp: [80.0, 80.0, 180.0, 120.0, 120.0, 200.0, 80.0, 80.0, 180.0, 120.0, 120.0, 200.0]
+    kd: [1.0, 1.0, 3.0, 1.0, 1.0, 3.0, 1.0, 1.0, 3.0, 1.0, 1.0, 3.0]
     feedback_temperature: 35.0

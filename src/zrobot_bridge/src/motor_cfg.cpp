@@ -62,7 +62,15 @@ void RobStrideMotor::receive_status_frame()
         throw std::runtime_error("Data size too small");
     }
 
-    std::cout << "communication_type: " << static_cast<int>(communication_type) << std::endl;
+    // 限频采样打印（方案C）：所有电机合计每 1000 帧打印一次（约 0.4s），
+    // 避免高频终端 IO 阻塞控制循环，采样间隔可按需调整
+    static unsigned long status_frame_count = 0;
+    const bool do_debug_print = (++status_frame_count % 1000 == 0);
+
+    if (do_debug_print)
+    {
+        std::cout << "communication_type: " << static_cast<int>(communication_type) << std::endl;
+    }
     if (communication_type == Communication_Type_MotorRequest)
     {
         // 解析数据：高字节在前（大端序）
@@ -83,7 +91,7 @@ void RobStrideMotor::receive_status_frame()
     else if (communication_type == 17)
     {
         params.data = uint8_t(data[4]);
-        std::cout << params.data << std::endl;
+        if (do_debug_print) { std::cout << params.data << std::endl; }
         params.index = 0X7005;
         for (int index_num = 0; index_num <= 13; index_num++)
         {
@@ -92,7 +100,7 @@ void RobStrideMotor::receive_status_frame()
                 {
                 case 0:
                     drw.run_mode.data = uint8_t(data[4]);
-                    std::cout << "mode data: " << static_cast<int>(data[4]) << std::endl;;
+                    if (do_debug_print) { std::cout << "mode data: " << static_cast<int>(data[4]) << std::endl; }
                     break;
                 case 1:
                     drw.iq_ref.data = Byte_to_float(data);
@@ -277,16 +285,23 @@ std::tuple<float, float, float, float> RobStrideMotor::send_motion_command(float
     frame.data[5] = kp_u;
     frame.data[6] = (kd_u >> 8);
     frame.data[7] = kd_u;
-    // 05 70 00 00 07 01 82 F9
-    std::cout << "canid = 0x" << std::hex << std::uppercase << frame.can_id << std::dec << std::endl;
-    for (int i = 0; i < 8; ++i)
+    // 限频采样打印（方案C）：所有电机合计每 1000 帧打印一次（约 0.4s），
+    // 避免高频终端 IO 阻塞控制循环，采样间隔可按需调整
+    static unsigned long motion_frame_count = 0;
+    const bool do_debug_print = (++motion_frame_count % 1000 == 0);
+
+    if (do_debug_print)
+    {
+        std::cout << "canid = 0x" << std::hex << std::uppercase << frame.can_id << std::dec << std::endl;
+        for (int i = 0; i < 8; ++i)
         {
             std::cout << "send data[" << i << "] = 0x"
                 << std::setw(2) << std::setfill('0')
                 << std::hex << std::uppercase
                 << static_cast<int>(frame.data[i]) << "  ";
         }
-    std::cout << std::dec << std::endl;
+        std::cout << std::dec << std::endl;
+    }
     int n = write(socket_fd, &frame, sizeof(frame));
 
     if (n != sizeof(frame))
