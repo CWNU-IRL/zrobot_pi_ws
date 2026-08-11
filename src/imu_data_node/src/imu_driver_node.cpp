@@ -30,6 +30,25 @@ namespace imu_data_node
           key_(0),
           rs485_index_(0)
     {
+        // 允许通过 ROS 参数覆盖默认配置（无需重新编译）:
+        //   ros2 run imu_data_node imu_data_node --ros-args \
+        //     -p port:=/dev/ttyUSB0 -p baud_rate:=115200 -p protocol:=TTL
+        port_name_ = this->declare_parameter<std::string>("port", port_name_);
+        baud_rate_ = this->declare_parameter<int>("baud_rate", baud_rate_);
+        const std::string protocol_str = this->declare_parameter<std::string>("protocol", "TTL");
+        if (protocol_str == "RS485")
+        {
+            protocol_ = ProtocolType::RS485;
+        }
+        else if (protocol_str == "CAN")
+        {
+            protocol_ = ProtocolType::CAN;
+        }
+        else
+        {
+            protocol_ = ProtocolType::TTL;
+        }
+
         // Initialize vectors
         acceleration_.resize(3, 0);     // 加速度
         angular_velocity_.resize(3, 0); // 角速度
@@ -380,11 +399,13 @@ namespace imu_data_node
         imu_publisher_->publish(imu_msg);
         imu_with_rpy_publisher_->publish(imu_with_rpy);
 
-        RCLCPP_INFO(this->get_logger(),
-                    "roll: %.2f°, pitch: %.2f°, yaw: %.2f°",
-                    roll_ * 180.0 / M_PI,
-                    pitch_ * 180.0 / M_PI,
-                    yaw_ * 180.0 / M_PI);
+        // 100Hz 下逐帧 INFO 会刷屏，降为节流打印（每 5 秒一行）
+        RCLCPP_INFO_THROTTLE(
+            this->get_logger(), *this->get_clock(), 5000,
+            "roll: %.2f°, pitch: %.2f°, yaw: %.2f°",
+            roll_ * 180.0 / M_PI,
+            pitch_ * 180.0 / M_PI,
+            yaw_ * 180.0 / M_PI);
     }
 
     std::vector<int16_t> ImuDriverNode::hexToShort(
@@ -479,10 +500,10 @@ int main(int argc, char **argv)
 {
     rclcpp::init(argc, argv);
 
-    // Use default protocol TTL, baud rate 2000000, port /dev/imu_usb
+    // 默认: TTL 协议, 波特率 115200（匹配 IMU 100Hz 输出）, 端口 /dev/imu_usb
     auto node = std::make_shared<imu_data_node::ImuDriverNode>(
         "/dev/imu_usb",
-        2000000,
+        115200,
         imu_data_node::ProtocolType::TTL);
 
     rclcpp::spin(node);

@@ -21,4 +21,10 @@ gazebo_motor_bridge_node:
     #   hip_roll: kp=200 kd=3, hip_pitch/yaw: kp=120 kd=1, knee: kp=180 kd=3, foot: kp=80 kd=1
     kp: [80.0, 80.0, 180.0, 120.0, 120.0, 200.0, 80.0, 80.0, 180.0, 120.0, 120.0, 200.0]
     kd: [1.0, 1.0, 3.0, 1.0, 1.0, 3.0, 1.0, 1.0, 3.0, 1.0, 1.0, 3.0]
+    # 电机方向符号（电机 id 顺序，±1，模拟实机电机方向反转）:
+    #   与 zrobot_deploy 的 joint_signs_ 按电机 id 映射一致:
+    #   motor 3=L_hip_pitch(-1), 5=L_hip_roll(-1), 6=R_foot_pitch(-1),
+    #   9=R_hip_pitch(-1), 11=R_hip_roll(-1)，其余 +1
+    motor_signs: [1.0, 1.0, 1.0, -1.0, 1.0, -1.0, -1.0, 1.0, 1.0, -1.0, 1.0, -1.0,
+                  1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
     feedback_temperature: 35.0

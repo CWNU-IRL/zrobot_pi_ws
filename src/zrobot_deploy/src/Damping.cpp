@@ -72,8 +72,12 @@ void Damping::initialize()
 
     std::array<float, 23> current_positions;
     if (!getCurrentPositions(current_positions)) {
-        RCLCPP_WARN(node_->get_logger(), "Failed to read current positions, fallback to zeros for damping init");
-        current_positions.fill(0.0f);
+        // 服务失败时回退到最近一次成功反馈（硬件约定，与指令空间一致），
+        // 避免以全零位姿为基准阻尼导致机器人被拉向零位
+        RCLCPP_WARN(node_->get_logger(),
+                    "Failed to read current positions, falling back to cached motor feedback");
+        std::array<float, 23> cached_velocities, cached_torques, cached_temperatures;
+        getMotorFeedback(current_positions, cached_velocities, cached_torques, cached_temperatures);
     }
 
     command_positions_ = current_positions;

@@ -43,6 +43,28 @@ void FSM::exit()
     RCLCPP_INFO(node_->get_logger(), "FSM exiting");
 }
 
+void FSM::requestSwitch(FSMState target)
+{
+    // 仅当当前无请求时写入（一次性语义，避免重复触发）
+    FSMState expected = FSMState::IDLE;
+    switch_target_.compare_exchange_strong(expected, target);
+}
+
+bool FSM::takeSwitchRequest(FSMState& target)
+{
+    FSMState expected = switch_target_.load();
+    if (expected == FSMState::IDLE)
+    {
+        return false;
+    }
+    if (switch_target_.compare_exchange_strong(expected, FSMState::IDLE))
+    {
+        target = expected;
+        return true;
+    }
+    return false;
+}
+
 /**
  * @brief 向底层控制器发送23个电机的目标位置指令
  * 

@@ -61,6 +61,8 @@ private:
     float action_delta_limit_;
     double startup_hold_seconds_;
     std::chrono::steady_clock::time_point init_time_;
+    std::chrono::steady_clock::time_point last_imu_time_;  // 最近一次 IMU 数据时间（sensor_data_mutex_ 保护）
+    double imu_timeout_;                                   // IMU 数据超时阈值（秒），超时视为失联并保持姿态
 
     double dt_;
     double phase_period_;

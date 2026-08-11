@@ -215,6 +215,28 @@ int main(int argc, char** argv)
         // 运行当前状态机
         if (current_fsm) {
             current_fsm->run();
+
+            // 处理状态机内部发起的切换请求（如 IMU 超时 → Damping）
+            FSMState switch_target = FSMState::IDLE;
+            if (current_fsm->takeSwitchRequest(switch_target)) {
+                RCLCPP_WARN(node->get_logger(), "FSM requested switch to state %d, switching...",
+                            static_cast<int>(switch_target));
+                current_fsm->exit();
+                current_fsm.reset();
+
+                if (switch_target == FSMState::DAMPING) {
+                    RCLCPP_INFO(node->get_logger(), "Auto switching to Damping FSM...");
+                    current_fsm = std::make_shared<Damping>(node);
+                    current_fsm->initialize();
+                } else if (switch_target == FSMState::FIX_STAND) {
+                    RCLCPP_INFO(node->get_logger(), "Auto switching to FixStand FSM...");
+                    current_fsm = std::make_shared<FixStand>(node);
+                    current_fsm->initialize();
+                } else {
+                    RCLCPP_WARN(node->get_logger(), "Unsupported switch target %d, staying stopped",
+                                static_cast<int>(switch_target));
+                }
+            }
         }
         
         // 处理 ROS 回调（非阻塞）

@@ -70,9 +70,12 @@ target_link_libraries(main
 )
 
 # Keep runtime dependency local to installed executable directory.
+# NOTE: with --symlink-install, $ORIGIN resolves to the build directory
+# (glibc resolves symlinks via /proc/self/exe), so also search the real
+# install prefix to locate libonnxruntime.so.1.16.3.
 set_target_properties(main PROPERTIES
         BUILD_WITH_INSTALL_RPATH TRUE
-        INSTALL_RPATH "$ORIGIN"
+        INSTALL_RPATH "$ORIGIN:${CMAKE_INSTALL_PREFIX}/lib/${PROJECT_NAME}"
 )
 
 target_include_directories(main

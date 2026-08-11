@@ -18,6 +18,7 @@ Locomotion::Locomotion(std::shared_ptr<rclcpp::Node> node)
     enable_action_safety_(true),
     startup_hold_seconds_(3.0),
     action_delta_limit_(0.08f),
+    imu_timeout_(0.5),
       dt_(0.01),
             phase_period_(0.64),
             frame_stack_(15),
@@ -130,32 +131,55 @@ void Locomotion::run()
         return;
     }
 
-    if (require_imu_before_locomotion_ && !imu_received_)
+    // IMU 新鲜度检查：未收到或数据超时（imu_timeout_ 秒）都保持默认姿态
+    std::chrono::steady_clock::time_point last_imu_time;
     {
-        std::array<float, 23> hold_positions{};
-        for (int i = 0; i < NUM_ACTIONS; ++i)
+        std::lock_guard<std::mutex> lock(sensor_data_mutex_);
+        last_imu_time = last_imu_time_;
+    }
+    const double imu_elapsed = std::chrono::duration<double>(Clock::now() - last_imu_time).count();
+    if (require_imu_before_locomotion_ && (!imu_received_ || imu_elapsed > imu_timeout_))
+    {
+        if (imu_received_)
         {
-            if (i == IDX_L_FOOT_PITCH || i == IDX_L_FOOT_ROLL ||
-                i == IDX_R_FOOT_PITCH || i == IDX_R_FOOT_ROLL)
-            {
-                continue;
-            }
-            const int motor_idx = dof_indices_[i];
-            if (motor_idx >= 0 && motor_idx < NUM_MOTORS)
-            {
-                hold_positions[static_cast<size_t>(motor_idx)] = joint_signs_[i] * default_pose_(i);
-            }
+            // IMU 失联（超时）: 停止推理并请求切换为 Damping（围绕当前姿态阻尼，安全停机）
+            RCLCPP_WARN_THROTTLE(
+                node_->get_logger(),
+                *node_->get_clock(),
+                2000,
+                "IMU data stale (%.1fs > %.1fs), switching to Damping in Locomotion",
+                imu_elapsed, imu_timeout_);
+            requestSwitch(FSMState::DAMPING);
+            exit();  // 立即停止推理线程，等待主循环接管切换
         }
-        applyAnkleIK(hold_positions, IDX_L_FOOT_PITCH, IDX_L_FOOT_ROLL);
-        applyAnkleIK(hold_positions, IDX_R_FOOT_PITCH, IDX_R_FOOT_ROLL);
-        RCLCPP_WARN_THROTTLE(
-            node_->get_logger(),
-            *node_->get_clock(),
-            2000,
-            "IMU data not received yet, holding default pose in Locomotion");
-        if (!sendMotorPositions(hold_positions))
+        else
         {
-            RCLCPP_ERROR(node_->get_logger(), "Failed to hold default pose while waiting IMU");
+            // 从未收到 IMU（启动阶段）: 保持默认姿态等待
+            std::array<float, 23> hold_positions{};
+            for (int i = 0; i < NUM_ACTIONS; ++i)
+            {
+                if (i == IDX_L_FOOT_PITCH || i == IDX_L_FOOT_ROLL ||
+                    i == IDX_R_FOOT_PITCH || i == IDX_R_FOOT_ROLL)
+                {
+                    continue;
+                }
+                const int motor_idx = dof_indices_[i];
+                if (motor_idx >= 0 && motor_idx < NUM_MOTORS)
+                {
+                    hold_positions[static_cast<size_t>(motor_idx)] = joint_signs_[i] * default_pose_(i);
+                }
+            }
+            applyAnkleIK(hold_positions, IDX_L_FOOT_PITCH, IDX_L_FOOT_ROLL);
+            applyAnkleIK(hold_positions, IDX_R_FOOT_PITCH, IDX_R_FOOT_ROLL);
+            RCLCPP_WARN_THROTTLE(
+                node_->get_logger(),
+                *node_->get_clock(),
+                2000,
+                "IMU data not received yet, holding default pose in Locomotion");
+            if (!sendMotorPositions(hold_positions))
+            {
+                RCLCPP_ERROR(node_->get_logger(), "Failed to hold default pose while waiting IMU");
+            }
         }
         return;
     }
@@ -318,6 +342,7 @@ void Locomotion::initializeParameters()
 
     startup_hold_seconds_ = node_->declare_parameter<double>("startup_hold_seconds", 3.0);
     require_imu_before_locomotion_ = node_->declare_parameter<bool>("require_imu_before_locomotion", true);
+    imu_timeout_ = node_->declare_parameter<double>("imu_timeout", 0.5);
 
     enable_action_safety_ = node_->declare_parameter<bool>("enable_action_safety", true);
     action_delta_limit_ = static_cast<float>(node_->declare_parameter<double>("action_delta_limit", 0.08));
@@ -448,6 +473,7 @@ void Locomotion::imuCallback(const sensor_msgs::msg::Imu::SharedPtr msg)
     }
 
     std::lock_guard<std::mutex> lock(sensor_data_mutex_);
+    last_imu_time_ = std::chrono::steady_clock::now();  // 记录新鲜度时间戳
     current_angular_velocity_(0) = static_cast<float>(msg->angular_velocity.x);
     current_angular_velocity_(1) = static_cast<float>(msg->angular_velocity.y);
     current_angular_velocity_(2) = static_cast<float>(msg->angular_velocity.z);

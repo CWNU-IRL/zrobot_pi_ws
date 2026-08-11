@@ -6,12 +6,13 @@
 #include <rs_interface/srv/get_positions.hpp>
 #include <memory>
 #include <mutex>
+#include <atomic>
 #include <vector>
 #include <array>
 
 // 状态机状态枚举
 enum class FSMState {
-    IDLE,           // 空闲状态
+    IDLE,           // 空闲状态（同时用作"无切换请求"哨兵值）
     FIX_STAND,      // 固定站立状态
     LOCOMOTION,     // 运动状态
     PT_LOCOMOTION,  // TorchScript(.pt)运动状态
@@ -29,6 +30,11 @@ public:
     virtual void run() = 0;
     FSMState getState() const { return current_state_; }
     virtual void exit();
+
+    // 状态切换请求（供 FSM 内部触发，如安全保护：IMU 超时 → DAMPING）
+    // 一次性语义：IDLE 表示无请求；takeSwitchRequest 取出后自动清除
+    void requestSwitch(FSMState target);
+    bool takeSwitchRequest(FSMState& target);
     
 protected:
     // 向底层发送电机位置控制指令
@@ -52,6 +58,9 @@ protected:
     
     // 当前状态
     FSMState current_state_;
+    
+    // 状态切换请求（IDLE = 无请求）
+    std::atomic<FSMState> switch_target_{FSMState::IDLE};
     
     // 控制频率（Hz）
     double control_frequency_;
