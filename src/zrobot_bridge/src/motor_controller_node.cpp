@@ -248,7 +248,7 @@ void MotorControllerNode::handle_rob_stride_service(
 {
     std::lock_guard<std::mutex> lock(motors_mutex_);
 
-    RCLCPP_INFO(logger_, "接收到RobStrideMsgs服务请求");
+    RCLCPP_DEBUG(logger_, "接收到RobStrideMsgs服务请求");
 
     // 验证请求数据
     // if (request->positions.size() != NUM_MOTORS)
@@ -326,7 +326,7 @@ void MotorControllerNode::handle_rob_stride_service(
 
         response->success = true;
         response->message = "所有电机已成功控制";
-        RCLCPP_INFO(logger_, "RobStrideMsgs服务请求处理完成");
+        RCLCPP_DEBUG(logger_, "RobStrideMsgs服务请求处理完成");
     }
     catch (const std::exception &e)
     {
@@ -419,7 +419,7 @@ void MotorControllerNode::handle_get_positions_service(
 {
     std::lock_guard<std::mutex> lock(motors_mutex_);
 
-    RCLCPP_INFO(logger_, "接收到获取电机位置服务请求");
+    RCLCPP_DEBUG(logger_, "接收到获取电机位置服务请求");
 
     bool has_error = false;
 
@@ -442,7 +442,7 @@ void MotorControllerNode::handle_get_positions_service(
 
             response->feedback_positions[i] = pos;
 
-            RCLCPP_INFO(logger_, "电机%d当前位置: %.3f rad", i, pos);
+            RCLCPP_DEBUG(logger_, "电机%d当前位置: %.3f rad", i, pos);
         }
         catch (const std::exception &e)
         {
@@ -457,7 +457,7 @@ void MotorControllerNode::handle_get_positions_service(
                             ? "部分或全部电机位置读取失败"
                             : "所有电机位置读取成功";
 
-    RCLCPP_INFO(logger_, "位置读取服务请求处理完成");
+    RCLCPP_DEBUG(logger_, "位置读取服务请求处理完成");
 }
 
 int main(int argc, char *argv[])

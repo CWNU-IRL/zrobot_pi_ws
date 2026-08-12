@@ -145,6 +145,7 @@ bool FSM::getMotorFeedback(std::array<float, 23>& positions,
                           std::array<float, 23>& torques,
                           std::array<float, 23>& temperatures)
 {
+    std::lock_guard<std::mutex> lock(feedback_mutex_);
     positions = feedback_positions_;
     velocities = feedback_velocities_;
     torques = feedback_torques_;

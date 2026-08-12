@@ -215,22 +215,22 @@ public:
         error_code = uint8_t((can_id >> 16) & 0x3F);
         pattern = uint8_t((can_id >> 22) & 0x03);
 
-        // std::cout << "canid bits = " << std::bitset<32>(can_id) << std::endl;
-        // std::cout << "data bits = ";
-        // for (int i = 7; i >= 0; --i) { // 从高字节到低字节打印
-        //     std::cout << std::bitset<8>(frame.data[i]) << " ";
-        // }
-        std::cout << "canid = 0x" << std::hex << std::uppercase << can_id << std::dec << std::endl;
+        // 限频采样打印（方案C）：所有电机合计每 1000 帧打印一次，避免高频终端 IO 阻塞控制循环
+        static unsigned long recv_frame_count = 0;
+        const bool do_debug_print = (++recv_frame_count % 1000 == 0);
 
-        // std::cout << "data = ";
-        for (int i = 0; i < 8; ++i)
+        if (do_debug_print)
         {
-            std::cout << "data[" << i << "] = 0x"
-                << std::setw(2) << std::setfill('0')
-                << std::hex << std::uppercase
-                << static_cast<int>(frame.data[i]) << "  ";
+            std::cout << "canid = 0x" << std::hex << std::uppercase << can_id << std::dec << std::endl;
+            for (int i = 0; i < 8; ++i)
+            {
+                std::cout << "data[" << i << "] = 0x"
+                    << std::setw(2) << std::setfill('0')
+                    << std::hex << std::uppercase
+                    << static_cast<int>(frame.data[i]) << "  ";
+            }
+            std::cout << std::dec << std::endl; // 恢复为十进制输出
         }
-        std::cout << std::dec << std::endl; // 恢复为十进制输出
 
         std::vector<uint8_t> data(frame.data, frame.data + frame.can_dlc);
 
@@ -239,10 +239,15 @@ public:
 
     std::tuple<float, float, float, float> return_data_pvtt()
     {
-        std::cout << "-----position_feedback: " << position_ << std::endl;
-        std::cout << "-----velocity_feedback: " << velocity_ << std::endl;
-        std::cout << "-----torque: " << torque_ << std::endl;
-        std::cout << "-----temperature: " << temperature_ << std::endl;
+        // 限频采样打印：每 1000 次调用打印一次
+        static unsigned long pvtt_count = 0;
+        if (++pvtt_count % 1000 == 0)
+        {
+            std::cout << "-----position_feedback: " << position_ << std::endl;
+            std::cout << "-----velocity_feedback: " << velocity_ << std::endl;
+            std::cout << "-----torque: " << torque_ << std::endl;
+            std::cout << "-----temperature: " << temperature_ << std::endl;
+        }
 
         return std::make_tuple(position_, velocity_, torque_, temperature_);
     }

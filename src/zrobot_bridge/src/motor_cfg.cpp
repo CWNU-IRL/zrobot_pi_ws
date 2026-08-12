@@ -40,7 +40,8 @@ void RobStrideMotor::init_socket()
 
 void RobStrideMotor::receive_status_frame()
 {
-    auto result = receive(5);
+    // 20ms 短超时（临时保护）：单电机丢帧时快速跳过，避免 5 秒超时卡死整条 100Hz 控制链路
+    auto result = receive(0.02);
     if (!result)
     {
         throw std::runtime_error("No frame received.");
@@ -176,22 +177,29 @@ void RobStrideMotor::Set_RobStrite_Motor_parameter(uint16_t Index, float Value, 
         frame.data[7] = 0x00;
     }
 
-    std::cout << "canid = 0x" << std::hex << std::uppercase << frame.can_id << std::dec << std::endl;
-    for (int i = 0; i < 8; ++i)
+    // 限频采样打印（方案C）：每 1000 次调用打印一次，避免高频终端 IO
+    static unsigned long param_frame_count = 0;
+    const bool do_debug_print = (++param_frame_count % 1000 == 0);
+
+    if (do_debug_print)
+    {
+        std::cout << "canid = 0x" << std::hex << std::uppercase << frame.can_id << std::dec << std::endl;
+        for (int i = 0; i < 8; ++i)
         {
             std::cout << "send data[" << i << "] = 0x"
                 << std::setw(2) << std::setfill('0')
                 << std::hex << std::uppercase
                 << static_cast<int>(frame.data[i]) << "  ";
         }
-    std::cout << std::dec << std::endl;
+        std::cout << std::dec << std::endl;
+    }
 
     int n = write(socket_fd, &frame, sizeof(frame));
     if (n != sizeof(frame))
     {
         perror("set mode failed");
     }
-    else
+    else if (do_debug_print)
     {
         std::cout << "[✓] Motor set-mode command sent." << std::endl;
     }
@@ -206,21 +214,28 @@ std::tuple<float, float, float, float> RobStrideMotor::enable_motor()
     frame.can_id |= CAN_EFF_FLAG; // 扩展帧
     frame.can_dlc = 8;
     memset(frame.data, 0, 8);
-    std::cout << "canid = 0x" << std::hex << std::uppercase << frame.can_id << std::dec << std::endl;
-    for (int i = 0; i < 8; ++i)
+    // 限频采样打印（方案C）：每 1000 次调用打印一次，避免高频终端 IO
+    static unsigned long enable_frame_count = 0;
+    const bool do_debug_print = (++enable_frame_count % 1000 == 0);
+
+    if (do_debug_print)
+    {
+        std::cout << "canid = 0x" << std::hex << std::uppercase << frame.can_id << std::dec << std::endl;
+        for (int i = 0; i < 8; ++i)
         {
             std::cout << "send data[" << i << "] = 0x"
                 << std::setw(2) << std::setfill('0')
                 << std::hex << std::uppercase
                 << static_cast<int>(frame.data[i]) << "  ";
         }
-    std::cout << std::dec << std::endl;
+        std::cout << std::dec << std::endl;
+    }
     int n = write(socket_fd, &frame, sizeof(frame));
     if (n != sizeof(frame))
     {
         perror("enable_motor failed");
     }
-    else
+    else if (do_debug_print)
     {
         std::cout << "[✓] Motor enable command sent." << std::endl;
     }
@@ -329,9 +344,19 @@ std::tuple<float, float, float, float> RobStrideMotor::send_velocity_mode_comman
         Set_RobStrite_Motor_parameter(0X7026, Motor_Set_All.set_acc, Set_parameter);
         usleep(1000);
     }
-    std::cout << "excute vel_mode" << std::endl;
-    Set_RobStrite_Motor_parameter(0X700A, velocity_rad_s, Set_parameter);
-    std::cout << "finish" << std::endl;
+    // 限频采样打印（方案C）：每 1000 次调用打印一次
+    static unsigned long vel_cmd_count = 0;
+    const bool do_debug_print = (++vel_cmd_count % 1000 == 0);
+    if (do_debug_print)
+    {
+        std::cout << "excute vel_mode" << std::endl;
+        Set_RobStrite_Motor_parameter(0X700A, velocity_rad_s, Set_parameter);
+        std::cout << "finish" << std::endl;
+    }
+    else
+    {
+        Set_RobStrite_Motor_parameter(0X700A, velocity_rad_s, Set_parameter);
+    }
     return std::make_tuple(position_, velocity_, torque_, temperature_);
 }
 
@@ -374,10 +399,14 @@ float RobStrideMotor::read_initial_position()
             uint8_t mid = (canid >> 8) & 0xFF;
             uint8_t eid = canid & 0xFF;
 
-            // please switch print output;
-            printf("type: 0x%02X\n", type);
-            printf("mid:  0x%02X\n", mid);
-            printf("eid:  0x%02X\n", eid);
+            // 限频采样打印（方案C）：每 1000 帧打印一次，避免超时等待期间刷屏
+            static unsigned long init_pos_count = 0;
+            if (++init_pos_count % 1000 == 0)
+            {
+                printf("type: 0x%02X\n", type);
+                printf("mid:  0x%02X\n", mid);
+                printf("eid:  0x%02X\n", eid);
+            }
 
             if (type == 0x02 && mid == 0x01 && eid == 0xFD)
             {
@@ -418,7 +447,12 @@ void RobStrideMotor::Get_RobStrite_Motor_parameter(uint16_t Index)
     {
         perror("get_motor_parameter failed");
     }
-    std::cout << "excute Get_motor_params" << std::endl;
+    // 限频采样打印（方案C）：每 1000 次调用打印一次
+    static unsigned long get_param_count = 0;
+    if (++get_param_count % 1000 == 0)
+    {
+        std::cout << "excute Get_motor_params" << std::endl;
+    }
     receive_status_frame();
 }
 
