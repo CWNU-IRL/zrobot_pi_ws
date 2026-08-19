@@ -370,8 +370,8 @@ void MotorControllerNode::handle_set_zeros_service(
     {
         if (!motors_[i])
         {
-            RCLCPP_WARN(logger_, "电机%d未初始化，跳过零点设置", i);
-            has_error = true;
+            // 未安装的电机跳过，不计入失败
+            RCLCPP_DEBUG(logger_, "电机%d未初始化，跳过零点设置", i);
             continue;
         }
 
@@ -423,14 +423,25 @@ void MotorControllerNode::handle_get_positions_service(
 
     bool has_error = false;
 
+    // 下肢电机 0-11 必须在线并成功返回位置，否则视为读取失败；
+    // 上肢电机 12-22 未安装（未初始化）时不阻塞，位置保持 0
+    static constexpr int LEG_MOTOR_COUNT = 12;
+
     // 遍历所有电机，读取初始位置
     for (int i = 0; i < NUM_MOTORS; ++i)
     {
         if (!motors_[i])
         {
-            RCLCPP_WARN(logger_, "电机%d未初始化，位置设为0", i);
             response->feedback_positions[i] = 0.0f;
-            has_error = true;
+            if (i < LEG_MOTOR_COUNT)
+            {
+                RCLCPP_ERROR(logger_, "下肢电机%d未初始化，位置读取失败", i);
+                has_error = true;
+            }
+            else
+            {
+                RCLCPP_DEBUG(logger_, "电机%d未初始化，位置保持0", i);
+            }
             continue;
         }
 
@@ -448,7 +459,10 @@ void MotorControllerNode::handle_get_positions_service(
         {
             RCLCPP_ERROR(logger_, "读取电机%d位置失败: %s", i, e.what());
             response->feedback_positions[i] = 0.0f;
-            has_error = true;
+            if (i < LEG_MOTOR_COUNT)
+            {
+                has_error = true;
+            }
         }
     }
 

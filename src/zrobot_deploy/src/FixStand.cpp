@@ -54,8 +54,19 @@ void FixStand::initialize()
         // RCLCPP_DEBUG(node_->get_logger(), "Sample positions: [0]=%.3f, [1]=%.3f, [2]=%.3f rad", 
         //             initial_positions_[0], initial_positions_[1], initial_positions_[2]);
     } else {
-        RCLCPP_WARN(node_->get_logger(), "Failed to read initial positions from service, assuming zero");
-        initial_positions_.fill(0.0f);
+        // 读取失败时拒绝启动：以全 0 为插值起点会把电机猛拉向编码器零位，
+        // 若零位未校准（编码器 0 ≠ 机械零位姿态）将直接冲向物理限位。
+        RCLCPP_ERROR(node_->get_logger(),
+                     "Failed to read initial positions from service. FixStand will NOT start. "
+                     "Check zrobot_bridge feedback link before retrying.");
+        internal_state_ = InternalState::INIT;
+        is_initialized_ = false;
+        return;
+    }
+    
+    // 上肢电机 (12-22) 不参与 FixStand 姿态规划，保持当前位置而不是被拉回 0
+    for (size_t i = 12; i < target_positions_.size(); ++i) {
+        target_positions_[i] = initial_positions_[i];
     }
     
     // 重置时间
