@@ -26,6 +26,7 @@ public:
     void initialize() override;
     void run() override;
     void exit() override;
+    bool isReady() const override { return model_ready_; }
 
 private:
     static constexpr int NUM_SINGLE_OBS = 47;

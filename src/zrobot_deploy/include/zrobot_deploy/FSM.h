@@ -31,6 +31,9 @@ public:
     FSMState getState() const { return current_state_; }
     virtual void exit();
 
+    // 初始化是否成功（默认成功；FixStand 等可能因读取位置失败而拒绝启动）
+    virtual bool isReady() const { return true; }
+
     // 状态切换请求（供 FSM 内部触发，如安全保护：IMU 超时 → DAMPING）
     // 一次性语义：IDLE 表示无请求；takeSwitchRequest 取出后自动清除
     void requestSwitch(FSMState target);
@@ -73,6 +76,9 @@ protected:
     std::array<float, 23> feedback_velocities_;
     std::array<float, 23> feedback_torques_;
     std::array<float, 23> feedback_temperatures_;
+
+    // 是否曾经成功接收过电机反馈（Damping 用它判断缓存反馈能否作为阻尼基准）
+    std::atomic<bool> feedback_valid_{false};
 
     mutable std::mutex feedback_mutex_;
 };

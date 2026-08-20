@@ -267,7 +267,7 @@ void MotorControllerNode::handle_rob_stride_service(
         {
             if (!motors_[i])
             {
-                RCLCPP_WARN(logger_, "电机%d未初始化，跳过", i);
+                RCLCPP_WARN_ONCE(logger_, "电机%d未初始化，跳过", i);
                 continue;
             }
 
@@ -316,11 +316,15 @@ void MotorControllerNode::handle_rob_stride_service(
             }
             catch (const std::exception &e)
             {
-                RCLCPP_WARN(logger_, "电机%d 控制失败: %s", i, e.what());
-                response->feedback_positions[i] = 0.0f;
-                response->feedback_velocities[i] = 0.0f;
-                response->feedback_torques[i] = 0.0f;
-                response->feedback_temperatures[i] = 0.0f;
+                // 单帧丢失/超时时保留电机内部缓存的上一帧反馈，
+                // 避免反馈清零导致上层（Locomotion 观测）跳变
+                RCLCPP_WARN_THROTTLE(
+                    logger_, *this->get_clock(), 2000,
+                    "电机%d 控制失败，保留上次反馈: %s", i, e.what());
+                response->feedback_positions[i] = motors_[i]->position_;
+                response->feedback_velocities[i] = motors_[i]->velocity_;
+                response->feedback_torques[i] = motors_[i]->torque_;
+                response->feedback_temperatures[i] = motors_[i]->temperature_;
             }
         }
 

@@ -6,6 +6,33 @@
 #include <stdexcept>
 #include <vector>
 
+namespace {
+// 参数已存在时直接读取，避免重复 declare_parameter 抛出
+// ParameterAlreadyDeclaredException（FSM 会被反复创建/销毁）
+template <typename T>
+T getOrDeclareParameter(const std::shared_ptr<rclcpp::Node>& node,
+                        const std::string& name,
+                        const T& default_value)
+{
+    if (node->has_parameter(name))
+    {
+        T value{};
+        if (node->get_parameter(name, value))
+        {
+            return value;
+        }
+
+        RCLCPP_WARN(node->get_logger(),
+                    "Parameter '%s' exists but type mismatch, using default value",
+                    name.c_str());
+        return default_value;
+    }
+
+    return node->declare_parameter<T>(name, default_value);
+}
+
+} // namespace
+
 Locomotion::Locomotion(std::shared_ptr<rclcpp::Node> node)
     : FSM(node),
       ort_env_(nullptr),
@@ -65,18 +92,18 @@ void Locomotion::initialize()
 
     // 订阅 IMU 和遥控命令
     imu_sub_ = node_->create_subscription<sensor_msgs::msg::Imu>(
-        node_->declare_parameter<std::string>("imu_topic", "/imu/data"),
+        getOrDeclareParameter<std::string>(node_, "imu_topic", "/imu/data"),
         rclcpp::SensorDataQoS(),
         std::bind(&Locomotion::imuCallback, this, std::placeholders::_1));
 
     cmd_sub_ = node_->create_subscription<geometry_msgs::msg::Twist>(
-        node_->declare_parameter<std::string>("cmd_topic", "cmd_vel"),
+        getOrDeclareParameter<std::string>(node_, "cmd_topic", "cmd_vel"),
         10,
         std::bind(&Locomotion::cmdCallback, this, std::placeholders::_1));
 
     // 加载 ONNX 模型
-    const auto model_path = node_->declare_parameter<std::string>(
-        "onnx_model_path", std::string(POLICY_DIR) + "/policy.onnx");
+    const auto model_path = getOrDeclareParameter<std::string>(
+        node_, "onnx_model_path", std::string(POLICY_DIR) + "/policy.onnx");
     loadPolicy(model_path);
 
     if (!model_ready_)
@@ -312,13 +339,13 @@ void Locomotion::loadPolicy(const std::string &model_path)
 
 void Locomotion::initializeParameters()
 {
-    dt_ = node_->declare_parameter<double>("control_dt", 0.01);
-    phase_period_ = node_->declare_parameter<double>("phase_period", 0.64);
-    frame_stack_ = node_->declare_parameter<int>("frame_stack", 15);
-    model_obs_dim_ = node_->declare_parameter<int>("model_obs_dim", NUM_SINGLE_OBS * frame_stack_);
+    dt_ = getOrDeclareParameter<double>(node_, "control_dt", 0.01);
+    phase_period_ = getOrDeclareParameter<double>(node_, "phase_period", 0.64);
+    frame_stack_ = getOrDeclareParameter<int>(node_, "frame_stack", 15);
+    model_obs_dim_ = getOrDeclareParameter<int>(node_, "model_obs_dim", NUM_SINGLE_OBS * frame_stack_);
 
-    auto action_scale_param = node_->declare_parameter<std::vector<double>>(
-        "action_scale", std::vector<double>{0.15, 0.25, 0.25, 0.25, 0.1, 0.1, 0.15, 0.25, 0.25, 0.25, 0.1, 0.1});
+    auto action_scale_param = getOrDeclareParameter<std::vector<double>>(
+        node_, "action_scale", std::vector<double>{0.15, 0.25, 0.25, 0.25, 0.1, 0.1, 0.15, 0.25, 0.25, 0.25, 0.1, 0.1});
     if (action_scale_param.size() == NUM_ACTIONS)
     {
         for (int i = 0; i < NUM_ACTIONS; ++i)
@@ -332,29 +359,29 @@ void Locomotion::initializeParameters()
                     "action_scale size=%zu, expected=%d, using defaults",
                     action_scale_param.size(), NUM_ACTIONS);
     }
-    obs_clip_ = static_cast<float>(node_->declare_parameter<double>("clip_observations", 18.0));
-    act_clip_ = static_cast<float>(node_->declare_parameter<double>("clip_actions", 18.0));
+    obs_clip_ = static_cast<float>(getOrDeclareParameter<double>(node_, "clip_observations", 18.0));
+    act_clip_ = static_cast<float>(getOrDeclareParameter<double>(node_, "clip_actions", 18.0));
 
-    obs_scale_lin_vel_ = static_cast<float>(node_->declare_parameter<double>("obs_scale_lin_vel", 2.0));
-    obs_scale_ang_vel_ = static_cast<float>(node_->declare_parameter<double>("obs_scale_ang_vel", 1.0));
-    obs_scale_dof_pos_ = static_cast<float>(node_->declare_parameter<double>("obs_scale_dof_pos", 1.0));
-    obs_scale_dof_vel_ = static_cast<float>(node_->declare_parameter<double>("obs_scale_dof_vel", 0.05));
+    obs_scale_lin_vel_ = static_cast<float>(getOrDeclareParameter<double>(node_, "obs_scale_lin_vel", 2.0));
+    obs_scale_ang_vel_ = static_cast<float>(getOrDeclareParameter<double>(node_, "obs_scale_ang_vel", 1.0));
+    obs_scale_dof_pos_ = static_cast<float>(getOrDeclareParameter<double>(node_, "obs_scale_dof_pos", 1.0));
+    obs_scale_dof_vel_ = static_cast<float>(getOrDeclareParameter<double>(node_, "obs_scale_dof_vel", 0.05));
 
-    startup_hold_seconds_ = node_->declare_parameter<double>("startup_hold_seconds", 3.0);
-    require_imu_before_locomotion_ = node_->declare_parameter<bool>("require_imu_before_locomotion", true);
-    imu_timeout_ = node_->declare_parameter<double>("imu_timeout", 0.5);
+    startup_hold_seconds_ = getOrDeclareParameter<double>(node_, "startup_hold_seconds", 3.0);
+    require_imu_before_locomotion_ = getOrDeclareParameter<bool>(node_, "require_imu_before_locomotion", true);
+    imu_timeout_ = getOrDeclareParameter<double>(node_, "imu_timeout", 0.5);
 
-    enable_action_safety_ = node_->declare_parameter<bool>("enable_action_safety", true);
-    action_delta_limit_ = static_cast<float>(node_->declare_parameter<double>("action_delta_limit", 0.08));
+    enable_action_safety_ = getOrDeclareParameter<bool>(node_, "enable_action_safety", true);
+    action_delta_limit_ = static_cast<float>(getOrDeclareParameter<double>(node_, "action_delta_limit", 0.08));
 
-    auto default_pose_param = node_->declare_parameter<std::vector<double>>(
-        "default_pose", std::vector<double>{
+    auto default_pose_param = getOrDeclareParameter<std::vector<double>>(
+        node_, "default_pose", std::vector<double>{
             0.0, 0.0, -0.35, -0.65, 0.3, 0.0,   // L: hip_roll, hip_yaw, hip_pitch, knee, foot_pitch, foot_roll
             0.0, 0.0, 0.35, 0.65, -0.3, 0.0});  // R: hip_roll, hip_yaw, hip_pitch, knee, foot_pitch, foot_roll
-    auto dof_indices_param = node_->declare_parameter<std::vector<int64_t>>(
-        "dof_indices", std::vector<int64_t>{5, 4, 3, 2, 0, 1, 11, 10, 9, 8, 6, 7});
-    auto joint_signs_param = node_->declare_parameter<std::vector<double>>(
-        "joint_signs", std::vector<double>{
+    auto dof_indices_param = getOrDeclareParameter<std::vector<int64_t>>(
+        node_, "dof_indices", std::vector<int64_t>{5, 4, 3, 2, 0, 1, 11, 10, 9, 8, 6, 7});
+    auto joint_signs_param = getOrDeclareParameter<std::vector<double>>(
+        node_, "joint_signs", std::vector<double>{
             -1.0, 1.0, -1.0, 1.0, 1.0, 1.0,   // L: hip_roll, hip_yaw, hip_pitch, knee, foot_pitch, foot_roll
             -1.0, 1.0, -1.0, 1.0, -1.0, 1.0}); // R: hip_roll, hip_yaw, hip_pitch, knee, foot_pitch(机构反向), foot_roll
 

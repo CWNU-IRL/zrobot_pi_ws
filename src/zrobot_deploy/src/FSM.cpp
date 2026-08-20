@@ -107,6 +107,7 @@ bool FSM::sendMotorPositions(const std::array<float, 23>& positions)
                 feedback_torques_[i] = response->feedback_torques[i];
                 feedback_temperatures_[i] = response->feedback_temperatures[i];
             }
+            feedback_valid_ = true;
         }
         
         if (!response->success) {
@@ -166,10 +167,10 @@ bool FSM::getMotorFeedback(std::array<float, 23>& positions,
  * @note 函数执行流程：
  *       1. 等待get_positions服务可用（最多1秒）
  *       2. 发送服务请求
- *       3. 等待响应（最多5秒，因为每个电机可能需要时间）
+ *       3. 等待响应（最多1秒，服务端串行读12台电机最坏约240ms）
  *       4. 将响应中的位置数据复制到输出数组
  * 
- * @warning 该函数会阻塞等待服务响应，最多可能阻塞6秒
+ * @warning 该函数会阻塞等待服务响应，最多可能阻塞2秒
  * @warning 调用前必须确保get_positions服务已启动
  */
 bool FSM::getCurrentPositions(std::array<float, 23>& positions)
@@ -186,8 +187,8 @@ bool FSM::getCurrentPositions(std::array<float, 23>& positions)
     // 异步发送服务请求
     auto future = get_positions_client_->async_send_request(request);
     
-    // 等待服务响应（超时时间：5秒，因为read_initial_position可能需要较长时间）
-    if (rclcpp::spin_until_future_complete(node_, future, std::chrono::seconds(5)) 
+    // 等待服务响应（超时时间：1秒）
+    if (rclcpp::spin_until_future_complete(node_, future, std::chrono::seconds(1)) 
         == rclcpp::FutureReturnCode::SUCCESS)
     {
         auto response = future.get();

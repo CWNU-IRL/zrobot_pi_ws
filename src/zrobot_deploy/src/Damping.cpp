@@ -78,6 +78,16 @@ void Damping::initialize()
                     "Failed to read current positions, falling back to cached motor feedback");
         std::array<float, 23> cached_velocities, cached_torques, cached_temperatures;
         getMotorFeedback(current_positions, cached_velocities, cached_torques, cached_temperatures);
+
+        // 缓存反馈从未被成功刷新过（如桥接层刚启动）时不可信，
+        // 以全 0 为阻尼基准会把电机拉向零位，此时拒绝初始化
+        if (!feedback_valid_) {
+            RCLCPP_ERROR(node_->get_logger(),
+                         "No valid motor feedback cache. Damping will NOT start to avoid "
+                         "pulling motors toward zero. Check /rob_stride_control service.");
+            is_initialized_ = false;
+            return;
+        }
     }
 
     command_positions_ = current_positions;

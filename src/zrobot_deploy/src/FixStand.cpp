@@ -100,10 +100,7 @@ void FixStand::run()
             
         case InternalState::MOVING:
         {
-            // 更新已过时间
-            elapsed_time_ += dt;
-            
-            // 计算插值参数 t (0 到 1)
+            // 计算插值参数 t (0 到 1)，基于已成功推进的时间
             double t = std::min(elapsed_time_ / interpolation_time_, 1.0);
             
             // 线性插值计算当前目标位置
@@ -111,10 +108,15 @@ void FixStand::run()
                 current_motor_positions_[i] = lerp(initial_positions_[i], target_positions_[i], t);
             }
             
-            // 发送位置指令
+            // 发送位置指令；失败时不推进插值时间，下个周期重发同一目标，
+            // 避免通信中断期间时间累积、恢复后目标位置突然跳变
             if (!sendMotorPositions(current_motor_positions_)) {
                 RCLCPP_ERROR(node_->get_logger(), "Failed to send motor positions");
+                break;
             }
+            
+            // 发送成功后才推进已过时间
+            elapsed_time_ += dt;
             
             // 检查是否完成移动
             if (t >= 1.0) {

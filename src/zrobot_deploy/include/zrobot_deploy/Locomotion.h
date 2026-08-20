@@ -25,6 +25,7 @@ public:
     void initialize() override;
     void run() override;
     void exit() override;
+    bool isReady() const override { return model_ready_; }
     
 private:
     // ===== ONNX 推理相关 =====

@@ -15,6 +15,7 @@ public:
     void initialize() override;
     void run() override;
     void exit() override;
+    bool isReady() const override { return is_initialized_; }
     
 private:
     // 内部状态

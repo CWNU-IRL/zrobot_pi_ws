@@ -111,7 +111,12 @@ int main(int argc, char** argv)
                     current_fsm = std::make_shared<FixStand>(node);
                     current_fsm->initialize();
                     
-                    std::cout << "\n>>> FixStand 状态机已启动 <<<\n\n";
+                    if (!current_fsm->isReady()) {
+                        std::cout << "\n>>> FixStand 初始化失败，状态机未启动（详见上方错误日志）<<<\n\n";
+                        current_fsm.reset();
+                    } else {
+                        std::cout << "\n>>> FixStand 状态机已启动 <<<\n\n";
+                    }
                     break;
                 }
 
@@ -130,7 +135,12 @@ int main(int argc, char** argv)
                     current_fsm = std::make_shared<Locomotion>(node);
                     current_fsm->initialize();
 
-                    std::cout << "\n>>> Locomotion 状态机已启动 <<<\n\n";
+                    if (!current_fsm->isReady()) {
+                        std::cout << "\n>>> Locomotion 模型加载失败，状态机未启动（详见上方错误日志）<<<\n\n";
+                        current_fsm.reset();
+                    } else {
+                        std::cout << "\n>>> Locomotion 状态机已启动 <<<\n\n";
+                    }
                     break;
                 }
 
@@ -147,7 +157,12 @@ int main(int argc, char** argv)
                     current_fsm = std::make_shared<PTLocomotion>(node);
                     current_fsm->initialize();
 
-                    std::cout << "\n>>> PTLocomotion 状态机已启动 <<<\n\n";
+                    if (!current_fsm->isReady()) {
+                        std::cout << "\n>>> PTLocomotion 模型加载失败，状态机未启动（详见上方错误日志）<<<\n\n";
+                        current_fsm.reset();
+                    } else {
+                        std::cout << "\n>>> PTLocomotion 状态机已启动 <<<\n\n";
+                    }
                     break;
                 }
 
@@ -166,7 +181,12 @@ int main(int argc, char** argv)
                     current_fsm = std::make_shared<Damping>(node);
                     current_fsm->initialize();
 
-                    std::cout << "\n>>> Damping 状态机已启动 <<<\n\n";
+                    if (!current_fsm->isReady()) {
+                        std::cout << "\n>>> Damping 初始化失败，状态机未启动（详见上方错误日志）<<<\n\n";
+                        current_fsm.reset();
+                    } else {
+                        std::cout << "\n>>> Damping 状态机已启动 <<<\n\n";
+                    }
                     break;
                 }
                 
@@ -185,7 +205,12 @@ int main(int argc, char** argv)
                             RCLCPP_INFO(node->get_logger(), "Damping stopped, auto switching to FixStand...");
                             current_fsm = std::make_shared<FixStand>(node);
                             current_fsm->initialize();
-                            std::cout << "\n>>> 已自动切换到 FixStand 状态机 <<<\n\n";
+                            if (!current_fsm->isReady()) {
+                                std::cout << "\n>>> FixStand 初始化失败，保持停止状态 <<<\n\n";
+                                current_fsm.reset();
+                            } else {
+                                std::cout << "\n>>> 已自动切换到 FixStand 状态机 <<<\n\n";
+                            }
                         }
                     } else {
                         std::cout << "\n>>> 没有正在运行的状态机 <<<\n\n";
@@ -228,10 +253,20 @@ int main(int argc, char** argv)
                     RCLCPP_INFO(node->get_logger(), "Auto switching to Damping FSM...");
                     current_fsm = std::make_shared<Damping>(node);
                     current_fsm->initialize();
+                    if (!current_fsm->isReady()) {
+                        RCLCPP_ERROR(node->get_logger(),
+                                     "Auto Damping initialization failed, motors stay frozen");
+                        current_fsm.reset();
+                    }
                 } else if (switch_target == FSMState::FIX_STAND) {
                     RCLCPP_INFO(node->get_logger(), "Auto switching to FixStand FSM...");
                     current_fsm = std::make_shared<FixStand>(node);
                     current_fsm->initialize();
+                    if (!current_fsm->isReady()) {
+                        RCLCPP_ERROR(node->get_logger(),
+                                     "Auto FixStand initialization failed, motors stay frozen");
+                        current_fsm.reset();
+                    }
                 } else {
                     RCLCPP_WARN(node->get_logger(), "Unsupported switch target %d, staying stopped",
                                 static_cast<int>(switch_target));
