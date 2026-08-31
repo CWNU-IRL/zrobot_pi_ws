@@ -482,7 +482,7 @@ int main(int argc, char **argv)
     // Use default protocol TTL, baud rate 2000000, port /dev/imu_usb
     auto node = std::make_shared<imu_data_node::ImuDriverNode>(
         "/dev/imu_usb",
-        2000000,
+        115200,
         imu_data_node::ProtocolType::TTL);
 
     rclcpp::spin(node);
