@@ -1,12 +1,41 @@
+# /// script
+# requires-python = ">=3.10"
+# dependencies = [
+#     "torch==2.3.0",
+#     "onnx",
+#     "numpy",
+#     "onnxruntime",
+# ]
+# ///
 import argparse
 import os
 import sys
 import torch
 
 
+def infer_input_dim(model):
+    """从模型中推断输入维度：优先图中形状，其次第一个线性层权重。"""
+    for inp in model.graph.inputs():
+        if inp.type().kind() == "TensorType":
+            sizes = inp.type().sizes()
+            if sizes and len(sizes) == 2:
+                return sizes[1]
+    for name, p in model.named_parameters():
+        if name.endswith(".weight") and p.dim() == 2:
+            return p.size(1)
+    return None
+
+
 def export_to_onnx(jit_model_path, onnx_model_path, obs_dim, opset=13):
     model = torch.jit.load(jit_model_path, map_location="cpu")
     model.eval()
+
+    if obs_dim is None:
+        obs_dim = infer_input_dim(model)
+        if obs_dim is None:
+            print("[ERR] 无法自动推断输入维度，请用 --obs_dim 显式指定。")
+            sys.exit(1)
+        print(f"[INFO] 从模型中推断输入维度: {obs_dim}")
 
     dummy_input = torch.randn(1, obs_dim, dtype=torch.float32)
 
@@ -136,7 +165,7 @@ def main():
     parser = argparse.ArgumentParser(description="Convert TorchScript (.pt) to ONNX and validate.")
     parser.add_argument("--jit_model", type=str, required=True, help="Path to TorchScript model (policy_1.pt)")
     parser.add_argument("--onnx_model", type=str, required=True, help="Output ONNX file path")
-    parser.add_argument("--obs_dim", type=int, required=True, help="Observation dimension")
+    parser.add_argument("--obs_dim", type=int, default=None, help="Observation dimension (default: auto-detect from model)")
     parser.add_argument("--opset", type=int, default=13, help="ONNX opset version (default: 13)")
     parser.add_argument("--skip_ort_test", action="store_true", help="Skip ONNX Runtime inference test")
     parser.add_argument("--skip_compare", action="store_true", help="Skip Torch vs ONNX output comparison")
@@ -151,6 +180,14 @@ def main():
         sys.exit(1)
 
     os.makedirs(os.path.dirname(args.onnx_model) or ".", exist_ok=True)
+
+    if args.obs_dim is None:
+        probe = torch.jit.load(args.jit_model, map_location="cpu")
+        args.obs_dim = infer_input_dim(probe)
+        if args.obs_dim is None:
+            print("[ERR] 无法自动推断输入维度，请用 --obs_dim 显式指定。")
+            sys.exit(1)
+        print(f"[INFO] 自动推断输入维度: {args.obs_dim}")
 
     export_to_onnx(args.jit_model, args.onnx_model, args.obs_dim, args.opset)
 
