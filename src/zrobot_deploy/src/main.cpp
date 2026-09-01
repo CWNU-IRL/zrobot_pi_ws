@@ -239,11 +239,22 @@ int main(int argc, char** argv)
         
         // 运行当前状态机
         if (current_fsm) {
-            current_fsm->run();
+            try
+            {
+                current_fsm->run();
+            }
+            catch (const std::exception &e)
+            {
+                // Ctrl+C 后 rclcpp 上下文失效，服务调用可能抛 RCLError；
+                // 捕获后由下方 rclcpp::ok() 判空退出，避免未捕获异常导致 terminate
+                RCLCPP_ERROR(node->get_logger(), "FSM run exception: %s", e.what());
+                current_fsm->exit();
+                current_fsm.reset();
+            }
 
             // 处理状态机内部发起的切换请求（如 IMU 超时 → Damping）
             FSMState switch_target = FSMState::IDLE;
-            if (current_fsm->takeSwitchRequest(switch_target)) {
+            if (current_fsm && current_fsm->takeSwitchRequest(switch_target)) {
                 RCLCPP_WARN(node->get_logger(), "FSM requested switch to state %d, switching...",
                             static_cast<int>(switch_target));
                 current_fsm->exit();

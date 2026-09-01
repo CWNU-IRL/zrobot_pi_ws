@@ -1,17 +1,21 @@
 #include "zrobot_deploy/FSM.h"
 
+// 跨 FSM 实例共享的电机反馈缓存定义
+std::array<float, 23> FSM::feedback_positions_{};
+std::array<float, 23> FSM::feedback_velocities_{};
+std::array<float, 23> FSM::feedback_torques_{};
+std::array<float, 23> FSM::feedback_temperatures_{};
+std::atomic<bool> FSM::feedback_valid_{false};
+std::mutex FSM::feedback_mutex_;
+
 FSM::FSM(std::shared_ptr<rclcpp::Node> node)
     : node_(node)
     , current_state_(FSMState::IDLE)
     , control_frequency_(100.0)  // 100Hz
 {
-    // 初始化
+    // 初始化（反馈缓存为 static，跨实例保留，不在此清零）
     current_motor_positions_.fill(0.0f);
-    feedback_positions_.fill(0.0f);
-    feedback_velocities_.fill(0.0f);
-    feedback_torques_.fill(0.0f);
-    feedback_temperatures_.fill(0.0f);
-    
+
     // 创建服务客户端
     control_client_ = node_->create_client<rs_interface::srv::RobStrideMsgs>("/rob_stride_control");
     get_positions_client_ = node_->create_client<rs_interface::srv::GetPositions>("/get_positions");

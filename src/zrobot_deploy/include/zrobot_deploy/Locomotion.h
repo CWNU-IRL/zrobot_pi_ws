@@ -101,11 +101,15 @@ private:
     int counter_;                                 // 循环计数器（用于相位计算）
     bool model_ready_;                            // 模型是否可推理
 
+    // IMU yaw 零偏（磁力计绝对航向 → 相对初始航向，与训练世界系 yaw≈0 对齐）
+    double yaw_offset_ = 0.0;
+    bool yaw_offset_set_ = false;
+
     // 踝关节并联机构 IK
     ParallelAnkle ankle_ik_;
-    float prev_L_pitch_ = 0.3f;   // FK 迭代初值：左脚 IK-pitch（对应策略索引4, default 0.3）
+    float prev_L_pitch_ = 0.19f;   // FK 迭代初值：左脚 IK-pitch（对应策略索引4, default 0.3）
     float prev_L_roll_  = 0.0f;   // FK 迭代初值：左脚 IK-roll （对应策略索引5, default 0.0）
-    float prev_R_pitch_ = 0.3f;   // FK 迭代初值：右脚机构 IK-pitch（非镜像机构, default 机构侧 +0.3）
+    float prev_R_pitch_ = 0.19f;   // FK 迭代初值：右脚机构 IK-pitch（非镜像机构, default 机构侧 +0.3）
     float prev_R_roll_  = 0.0f;   // FK 迭代初值：右脚机构 IK-roll （对应策略索引11, default 0.0）
     
     // 12维动作中踝关节 pitch/roll 的索引

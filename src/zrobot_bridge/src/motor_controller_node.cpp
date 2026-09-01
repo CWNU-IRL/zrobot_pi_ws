@@ -1,6 +1,7 @@
 #include "zrobot_bridge/motor_controller.h"
 #include <string>
 #include <vector>
+#include <chrono>
 
 /**
  * @brief MotorControllerNode 构造函数
@@ -262,7 +263,9 @@ void MotorControllerNode::handle_rob_stride_service(
     // 初始化响应数据
     try
     {
-        // 向所有电机发送指令并收集反馈
+        // 阶段 1：批量发送所有电机的运控指令（不等待反馈）。
+        // 串行"发一收一"会把每台电机的响应延迟累加（慢电机 20-30ms/台），
+        // 批量发送后电机响应并行到达，服务总耗时 ≈ 发送时间 + 最长响应延迟。
         for (int i = 0; i < NUM_MOTORS; ++i)
         {
             if (!motors_[i])
@@ -278,54 +281,82 @@ void MotorControllerNode::handle_rob_stride_service(
 
             try
             {
-                // CSP模式指令
-                // auto [pos, vel, torq, temp] = motors_[i]->RobStrite_Motor_PosCSP_control(
-                //     2.0f,                  // velocity (rad/s)
-                //     target_position        // position (rad)
-                // );
-
-                // 发送运控模式指令（位置 + 速度 + KP + KD）
-                // 参数：torque, position, velocity, kp, kd
-                // auto [pos, vel, torq, temp] = motors_[i]->send_motion_command(
-                //     0.0f,                  // torque
-                //     target_position,       // position (rad)
-                //     0.0f,                  // velocity (rad/s)
-                //     0.5f,                  // kp
-                //     0.1f                   // kd
-                // );
-
-                // 参数：torque, position, velocity, kp, kd
-                auto [pos, vel, torq, temp] = motors_[i]->send_motion_command(
+                // 批量发送：只发指令不等待反馈（反馈统一在阶段 2 收集），
+                // 避免串行"发一收一"把各电机响应延迟累加
+                motors_[i]->send_motion_command_no_wait(
                     0.0f,            // torque
                     target_position, // position (rad)
                     0.0f,            // velocity (rad/s)
-                    motor_kps_[i],            // kp
-                    motor_kds_[i]             // kd
+                    motor_kps_[i],   // kp
+                    motor_kds_[i]    // kd
                 );
-                // TODO
-                // if (i == ) {feedback_positions = -feedback_positions}
-                // 存储反馈数据
-                response->feedback_positions[i] = pos;
-                response->feedback_velocities[i] = vel;
-                response->feedback_torques[i] = torq;
-                response->feedback_temperatures[i] = temp;
-
-                RCLCPP_DEBUG(logger_,
-                             "电机%d 目标位置: %.3f rad, 反馈 - 位置: %.3f, 速度: %.3f, 扭矩: %.3f, 温度: %.1f",
-                             i, target_position, pos, vel, torq, temp);
             }
             catch (const std::exception &e)
             {
-                // 单帧丢失/超时时保留电机内部缓存的上一帧反馈，
-                // 避免反馈清零导致上层（Locomotion 观测）跳变
                 RCLCPP_WARN_THROTTLE(
                     logger_, *this->get_clock(), 2000,
-                    "电机%d 控制失败，保留上次反馈: %s", i, e.what());
-                response->feedback_positions[i] = motors_[i]->position_;
-                response->feedback_velocities[i] = motors_[i]->velocity_;
-                response->feedback_torques[i] = motors_[i]->torque_;
-                response->feedback_temperatures[i] = motors_[i]->temperature_;
+                    "电机%d 指令发送失败: %s", i, e.what());
             }
+        }
+
+        // 阶段 2：收集反馈，采用"快扫 + 补收"两轮结构。
+        // 快扫：给每台电机 1ms 余量，有帧立即收走、无帧立即返回（近似非阻塞），
+        //   避免单台慢/丢帧电机在共享窗口内阻塞耗尽后续电机的等待时间；
+        //   注意 deadline 必须大于当前时刻，否则 receive_feedback_until 的循环
+        //   一次都不会执行（等于空操作）。
+        // 补收：对快扫未命中的电机，共享剩余 35ms 窗口等待其响应。
+        std::array<bool, NUM_MOTORS> received{};
+        for (int i = 0; i < NUM_MOTORS; ++i)
+        {
+            if (!motors_[i])
+            {
+                continue;
+            }
+            try
+            {
+                received[i] = motors_[i]->receive_feedback_until(
+                    std::chrono::steady_clock::now() + std::chrono::milliseconds(1));
+            }
+            catch (const std::exception &e)
+            {
+                RCLCPP_WARN_THROTTLE(
+                    logger_, *this->get_clock(), 2000,
+                    "电机%d 快扫接收失败: %s", i, e.what());
+                received[i] = false;
+            }
+        }
+
+        const auto feedback_deadline =
+            std::chrono::steady_clock::now() + std::chrono::milliseconds(35);
+        for (int i = 0; i < NUM_MOTORS; ++i)
+        {
+            if (!motors_[i] || received[i])
+            {
+                continue;
+            }
+            try
+            {
+                motors_[i]->receive_feedback_until(feedback_deadline);
+            }
+            catch (const std::exception &e)
+            {
+                RCLCPP_WARN_THROTTLE(
+                    logger_, *this->get_clock(), 2000,
+                    "电机%d 补收反馈失败: %s", i, e.what());
+            }
+        }
+
+        // 统一从电机缓存读取最近一次有效反馈（超时/丢帧时保持旧值）
+        for (int i = 0; i < NUM_MOTORS; ++i)
+        {
+            if (!motors_[i])
+            {
+                continue;
+            }
+            response->feedback_positions[i] = motors_[i]->position_;
+            response->feedback_velocities[i] = motors_[i]->velocity_;
+            response->feedback_torques[i] = motors_[i]->torque_;
+            response->feedback_temperatures[i] = motors_[i]->temperature_;
         }
 
         response->success = true;

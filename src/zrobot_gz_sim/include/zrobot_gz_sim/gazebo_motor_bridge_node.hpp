@@ -79,9 +79,9 @@ private:
     // 踝关节并联机构（模拟实机: 电机角 <-> pitch/roll）
     // 注意: 与 zrobot_deploy/include/zrobot_deploy/paralleljoint_z1.h 保持同步
     ParallelAnkle ankle_ik_;
-    float prev_L_pitch_ = 0.3f;   // FK 迭代初值（机构约定，默认姿态 pitch=0.3）
+    float prev_L_pitch_ = 0.19f;   // FK 迭代初值（机构约定，默认姿态 pitch=0.3）
     float prev_L_roll_  = 0.0f;
-    float prev_R_pitch_ = 0.3f;   // 右踝非镜像机构: URDF -0.3 → 机构 +0.3
+    float prev_R_pitch_ = 0.19f;   // 右踝非镜像机构: URDF -0.3 → 机构 +0.3
     float prev_R_roll_  = 0.0f;
     // 踝关节电机索引（电机 id 约定，与部署层 dof_indices_ 一致）
     static constexpr size_t kIdxLAnklePitch = 0;

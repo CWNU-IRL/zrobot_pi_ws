@@ -6,6 +6,7 @@
 #include <map>
 #include <vector>
 #include <string>
+#include <atomic>
 
 #include "rclcpp/rclcpp.hpp"
 #include "sensor_msgs/msg/imu.hpp"
@@ -32,15 +33,18 @@ namespace imu_data_node
         ~ImuDriverNode();
 
     private:
-        // Serial port
-        LibSerial::SerialPort serial_port_;
+        // Serial port（堆分配：设备掉线时 SerialPort 析构会抛异常，
+        // 值类型成员析构异常会逃逸出本类析构导致 std::terminate，
+        // 用 unique_ptr 可在析构体中显式吞掉）
+        std::unique_ptr<LibSerial::SerialPort> serial_port_;
         std::string port_name_;
         int baud_rate_;
         ProtocolType protocol_;
 
         // Thread
         std::thread driver_thread_;
-        bool running_;
+        std::atomic<bool> running_;
+        int consecutive_failures_ = 0; // 串口连续重开失败轮数
 
         // Publishers
         rclcpp::Publisher<sensor_msgs::msg::Imu>::SharedPtr imu_publisher_;

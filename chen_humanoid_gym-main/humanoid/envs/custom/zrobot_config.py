@@ -98,23 +98,23 @@ class ZRobotCfg(LeggedRobotCfg):
             height_measurements = 0.1
 
     class init_state(LeggedRobotCfg.init_state):
-        pos = [0.0, 0.0, 0.760]
+        pos = [0.0, 0.0, 0.784]
 
         default_joint_angles = {  # = target angles [rad] when action = 0.0
             'L_hip_roll_joint': 0.,
             'L_hip_yaw_joint': 0.,
-            'L_hip_pitch_joint': -0.35,
-            'L_knee_joint': -0.65,
-            'L_foot_pitch_joint': 0.3,
+            'L_hip_pitch_joint': -0.13,
+            'L_knee_joint': -0.32,
+            'L_foot_pitch_joint': 0.19,
             'L_foot_roll_joint': 0.,
             'R_hip_roll_joint': 0.,
             'R_hip_yaw_joint': 0.,
-            'R_hip_pitch_joint': 0.35,
-            'R_knee_joint': 0.65,
-            'R_foot_pitch_joint': -0.3,
-            # 'R_hip_pitch_joint': 0.45,
-            # 'R_knee_joint': 0.85,
-            # 'R_foot_pitch_joint': -0.4,
+            'R_hip_pitch_joint': 0.13,
+            'R_knee_joint': 0.32,
+            'R_foot_pitch_joint': -0.19,
+            # 'R_hip_pitch_joint': 0.35,
+            # 'R_knee_joint': 0.65,
+            # 'R_foot_pitch_joint': -0.3,
             'R_foot_roll_joint': 0.,
         }
 
@@ -191,7 +191,7 @@ class ZRobotCfg(LeggedRobotCfg):
             heading = [-3.14, 3.14]
 
     class rewards:
-        base_height_target = 0.755
+        base_height_target = 0.780
         min_dist = 0.2
         max_dist = 0.5
         # put some settings here for LLM parameter tuning

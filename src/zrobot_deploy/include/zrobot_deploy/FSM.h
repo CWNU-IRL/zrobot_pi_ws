@@ -71,16 +71,17 @@ protected:
     // 当前电机位置
     std::array<float, 23> current_motor_positions_;
     
-    // 电机反馈
-    std::array<float, 23> feedback_positions_;
-    std::array<float, 23> feedback_velocities_;
-    std::array<float, 23> feedback_torques_;
-    std::array<float, 23> feedback_temperatures_;
+    // 电机反馈缓存（static 跨 FSM 实例共享：状态机切换时新实例可继承最近一次
+    // 成功反馈，避免 Damping 在位置读取失败时无有效缓存可用）
+    static std::array<float, 23> feedback_positions_;
+    static std::array<float, 23> feedback_velocities_;
+    static std::array<float, 23> feedback_torques_;
+    static std::array<float, 23> feedback_temperatures_;
 
     // 是否曾经成功接收过电机反馈（Damping 用它判断缓存反馈能否作为阻尼基准）
-    std::atomic<bool> feedback_valid_{false};
+    static std::atomic<bool> feedback_valid_;
 
-    mutable std::mutex feedback_mutex_;
+    static std::mutex feedback_mutex_;
 };
 
 #endif //ZROBOT_DEPLOY_FSM_H

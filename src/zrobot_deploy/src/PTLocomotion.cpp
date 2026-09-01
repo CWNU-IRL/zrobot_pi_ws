@@ -320,8 +320,8 @@ void PTLocomotion::initializeParameters()
 
     auto default_pose_param = getOrDeclareParameter<std::vector<double>>(
         node_, "default_pose", std::vector<double>{
-            0.0, 0.0, -0.35, -0.65, 0.3, 0.0,   // L: hip_roll, hip_yaw, hip_pitch, knee, foot_pitch, foot_roll
-            0.0, 0.0, 0.35, 0.65, -0.3, 0.0});  // R: hip_roll, hip_yaw, hip_pitch, knee, foot_pitch, foot_roll
+            0.0, 0.0, -0.13, -0.32, 0.19, 0.0,   // L: hip_roll, hip_yaw, hip_pitch, knee, foot_pitch, foot_roll
+            0.0, 0.0, 0.13, 0.32, -0.19, 0.0});  // R: hip_roll, hip_yaw, hip_pitch, knee, foot_pitch, foot_roll
     auto dof_indices_param = getOrDeclareParameter<std::vector<int64_t>>(
         node_, "dof_indices", std::vector<int64_t>{5, 4, 3, 2, 0, 1, 11, 10, 9, 8, 6, 7});
     auto joint_signs_param = getOrDeclareParameter<std::vector<double>>(
@@ -457,9 +457,22 @@ void PTLocomotion::imuCallback(const sensor_msgs::msg::Imu::SharedPtr msg)
         double pitch = 0.0;
         double yaw = 0.0;
         rot.getRPY(roll, pitch, yaw);
+
+        // yaw 零偏：IMU 磁力计 yaw 是绝对航向，训练时策略观测的 yaw 是仿真世界系
+        // 且初始≈0。以启动时航向为基准做零偏，避免策略输出持续转向/踏步。
+        if (!yaw_offset_set_)
+        {
+            yaw_offset_ = yaw;
+            yaw_offset_set_ = true;
+            RCLCPP_INFO(node_->get_logger(), "PTLocomotion yaw offset set to %.2f rad", yaw_offset_);
+        }
+        double yaw_rel = yaw - yaw_offset_;
+        while (yaw_rel > M_PI) { yaw_rel -= 2.0 * M_PI; }
+        while (yaw_rel < -M_PI) { yaw_rel += 2.0 * M_PI; }
+
         current_euler_(0) = static_cast<float>(roll);
         current_euler_(1) = static_cast<float>(pitch);
-        current_euler_(2) = static_cast<float>(yaw);
+        current_euler_(2) = static_cast<float>(yaw_rel);
     }
 }
 

@@ -5,7 +5,7 @@
 FixStand::FixStand(std::shared_ptr<rclcpp::Node> node)
     : FSM(node)
     , internal_state_(InternalState::INIT)
-    , interpolation_time_(3.0)  // 3秒
+    , interpolation_time_(3)  // 1秒
     , elapsed_time_(0.0)
     , is_initialized_(false)
 {
@@ -15,21 +15,21 @@ FixStand::FixStand(std::shared_ptr<rclcpp::Node> node)
     //   motor 6/7 = 右踝(pitch/roll), 8 = R_knee, 9 = R_hip_pitch, 10 = R_hip_yaw, 11 = R_hip_roll
     // 髋 pitch/roll 电机方向与 URDF 相反 (joint_signs_=-1)，目标值需取反
     target_positions_.fill(0.0f);
-    target_positions_[2] = -0.65f;   // L_knee
-    target_positions_[3] = 0.35f;    // L_hip_pitch (sign=-1: -(-0.35))
+    target_positions_[2] = -0.32f;   // L_knee
+    target_positions_[3] = 0.13f;    // L_hip_pitch (sign=-1: -(-0.35))
     target_positions_[4] = 0.0f;     // L_hip_yaw
     target_positions_[5] = 0.0f;     // L_hip_roll (sign=-1: -0.0)
-    target_positions_[8] = 0.65f;    // R_knee
-    target_positions_[9] = -0.35f;   // R_hip_pitch (sign=-1: -(0.35))
+    target_positions_[8] = 0.32f;    // R_knee
+    target_positions_[9] = -0.13f;   // R_hip_pitch (sign=-1: -(0.35))
     target_positions_[10] = 0.0f;    // R_hip_yaw
     target_positions_[11] = 0.0f;    // R_hip_roll (sign=-1: -0.0)
     // 踝关节并联机构：用 IK 计算默认姿态对应电机角度
     // 右踝已改为与左踝相同的非镜像结构，故两脚使用相同机构角度
     // (URDF 右踝 pitch 轴为 +Y，与机构 -Y 相反，default -0.3 → 机构 +0.3)
-    const auto ik_l = ankle_ik_.ik(0.3, 0.0);
+    const auto ik_l = ankle_ik_.ik(0.19, 0.0);
     target_positions_[0] = static_cast<float>(ik_l.theta1);
     target_positions_[1] = static_cast<float>(ik_l.theta2);
-    const auto ik_r = ankle_ik_.ik(0.3, 0.0);
+    const auto ik_r = ankle_ik_.ik(0.19, 0.0);
     target_positions_[6] = static_cast<float>(ik_r.theta1);
     target_positions_[7] = static_cast<float>(ik_r.theta2);
     initial_positions_.fill(0.0f);

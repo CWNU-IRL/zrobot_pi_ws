@@ -272,6 +272,16 @@ public:
                                                                float velocity_rad_s,
                                                                float kp = 0.5f,
                                                                float kd = 0.1f);
+    // 只发送运控指令不等待反馈（批量发送阶段使用）
+    void send_motion_command_no_wait(float torque,
+                                     float position_rad,
+                                     float velocity_rad_s,
+                                     float kp,
+                                     float kd);
+
+    // 在 deadline 前循环等待并解析状态帧(0x02)/参数帧(0x11)；
+    // 收到有效反馈返回 true，超时返回 false（反馈保持旧值）
+    bool receive_feedback_until(std::chrono::steady_clock::time_point deadline);
 
     float uint_to_float(uint16_t x_int, float x_min, float x_max, int bits)
     {
@@ -309,6 +319,11 @@ public:
         std::memcpy(&data_float, &data, sizeof(float)); // 比 *(float*)&data 更安全
         return data_float;
     }
+
+private:
+    // 尝试解析单帧：状态帧(0x02)与参数帧(0x11)解析成功返回 true；
+    // 其他类型（确认帧/故障帧等）返回 false 由调用方决定跳过还是继续
+    bool try_parse_frame(uint8_t communication_type, const std::vector<uint8_t>& data);
 
 public:
     std::string iface;

@@ -38,33 +38,14 @@ void RobStrideMotor::init_socket()
     }
 }
 
-void RobStrideMotor::receive_status_frame()
+bool RobStrideMotor::try_parse_frame(uint8_t communication_type, const std::vector<uint8_t>& data)
 {
-    // 20ms 短超时（临时保护）：单电机丢帧时快速跳过，避免 5 秒超时卡死整条 100Hz 控制链路
-    auto result = receive(0.02);
-    if (!result)
-    {
-        throw std::runtime_error("No frame received.");
-    }
-
-    auto [communication_type, extra_data, host_id, data] = *result;
-
-    // uint8_t status_mode = (extra_data >> 14) & 0x03;
-    // uint8_t status_uncalibrated = (extra_data >> 13) & 0x01;
-    // uint8_t status_hall_encoder_fault = (extra_data >> 12) & 0x01;
-    // uint8_t status_magnetic_encoder_fault = (extra_data >> 11) & 0x01;
-    // uint8_t status_overtemperature = (extra_data >> 10) & 0x01;
-    // uint8_t status_overcurrent = (extra_data >> 9) & 0x01;
-    // uint8_t status_undervoltage = (extra_data >> 8) & 0x01;
-    // uint8_t device_id = (extra_data >> 0) & 0xFF;
-
     if (data.size() < 8)
     {
         throw std::runtime_error("Data size too small");
     }
 
-    // 限频采样打印（方案C）：所有电机合计每 1000 帧打印一次（约 0.4s），
-    // 避免高频终端 IO 阻塞控制循环，采样间隔可按需调整
+    // 限频采样打印（方案C）：所有电机合计每 1000 帧打印一次（约 0.4s）
     static unsigned long status_frame_count = 0;
     const bool do_debug_print = (++status_frame_count % 1000 == 0);
 
@@ -88,6 +69,7 @@ void RobStrideMotor::receive_status_frame()
         torque_ = ((static_cast<float>(torque_i16) / 32767.0f) - 1.0f) * (ACTUATOR_OPERATION_MAPPING.at(
             static_cast<ActuatorType>(actuator_type)).torque);
         temperature_ = static_cast<float>(temperature_u16) * 0.1f;
+        return true;
     }
     else if (communication_type == 17)
     {
@@ -144,10 +126,63 @@ void RobStrideMotor::receive_status_frame()
                     break;
                 }
         }
+        return true;
     }
-    else
+    // 其他类型（确认帧/故障帧等）：由调用方决定跳过还是继续
+    return false;
+}
+
+bool RobStrideMotor::receive_feedback_until(std::chrono::steady_clock::time_point deadline)
+{
+    // 在 deadline 前循环等待：状态帧(0x02)/参数帧(0x11)解析成功即返回；
+    // 故障帧(0x15)记录后跳过；其他未知类型帧忽略；超时返回 false（反馈保持旧值）
+    while (std::chrono::steady_clock::now() < deadline)
     {
-        throw std::runtime_error("Invalid communication type");
+        const double remaining =
+            std::chrono::duration<double>(deadline - std::chrono::steady_clock::now()).count();
+        if (remaining <= 0.0)
+        {
+            break;
+        }
+
+        auto result = receive(remaining);
+        if (!result)
+        {
+            return false; // 超时
+        }
+
+        auto [communication_type, extra_data, host_id, data] = *result;
+
+        if (communication_type == Communication_Type_ErrorFeedback)
+        {
+            // 故障反馈帧(0x15)：data[0] 为故障码（含义见电机手册），记录后继续等待
+            static unsigned long err_frame_count = 0;
+            if (++err_frame_count % 200 == 0)
+            {
+                std::cout << "[!] Motor " << static_cast<int>(motor_id)
+                          << " error feedback frame, fault_code=" << static_cast<int>(data[0])
+                          << std::endl;
+            }
+            continue;
+        }
+
+        if (try_parse_frame(communication_type, data))
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
+void RobStrideMotor::receive_status_frame()
+{
+    // 30ms 窗口内等待反馈；超时抛异常（调用方决定如何处理）。
+    // 注：部分电机（如 can1 上的 7/9/11）响应延迟接近 20ms，窗口太紧会导致
+    // 反馈帧残留到下一轮被读到（错位一轮）并诱发电机报 0x15 故障帧。
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(30);
+    if (!receive_feedback_until(deadline))
+    {
+        throw std::runtime_error("No frame received.");
     }
 }
 
@@ -262,6 +297,18 @@ std::tuple<float, float, float, float> RobStrideMotor::send_motion_command(float
                                                                            float kp,
                                                                            float kd)
 {
+    send_motion_command_no_wait(torque, position_rad, velocity_rad_s, kp, kd);
+    receive_status_frame();
+    return std::make_tuple(position_, velocity_, torque_, temperature_);
+}
+
+// 只发送运控指令不等待反馈（批量发送阶段使用）
+void RobStrideMotor::send_motion_command_no_wait(float torque,
+                                                 float position_rad,
+                                                 float velocity_rad_s,
+                                                 float kp,
+                                                 float kd)
+{
     if (drw.run_mode.data != 0 && pattern == 2)
     {
         Disenable_Motor(0);
@@ -323,8 +370,6 @@ std::tuple<float, float, float, float> RobStrideMotor::send_motion_command(float
     {
         perror("send_motion_command failed");
     }
-    receive_status_frame();
-    return std::make_tuple(position_, velocity_, torque_, temperature_);
 }
 
 std::tuple<float, float, float, float> RobStrideMotor::send_velocity_mode_command(float velocity_rad_s)

@@ -60,6 +60,9 @@ namespace imu_data_node
         imu_publisher_ = this->create_publisher<sensor_msgs::msg::Imu>("imu/data", 10);
         imu_with_rpy_publisher_ = this->create_publisher<imu_msg::msg::ImuData>("imu/ImuDataWithRPY", 10);
 
+        // 堆分配串口对象（析构时在析构体中显式释放并吞掉异常）
+        serial_port_ = std::make_unique<LibSerial::SerialPort>();
+
         // Start driver thread
         driver_thread_ = std::thread(&ImuDriverNode::driverLoop, this);
     }
@@ -71,23 +74,37 @@ namespace imu_data_node
         {
             driver_thread_.join();
         }
-        if (serial_port_.IsOpen())
+        // 设备掉线时 SerialPort 的 Close/析构都会抛异常；
+        // 用 try-catch 包住 reset，确保异常不逃逸出析构函数（否则 std::terminate）
+        try
         {
-            serial_port_.Close();
+            serial_port_.reset();
+        }
+        catch (const std::exception &e)
+        {
+            RCLCPP_WARN(this->get_logger(), "Failed to close serial port: %s", e.what());
         }
     }
 
     void ImuDriverNode::driverLoop()
     {
-        openPort();
-        readData();
+        // 线程函数兜底捕获：任何未预期异常都不得逃逸出线程（否则 std::terminate 使整个进程 abort）
+        try
+        {
+            openPort();
+            readData();
+        }
+        catch (const std::exception &e)
+        {
+            RCLCPP_ERROR(this->get_logger(), "IMU driver thread terminated by exception: %s", e.what());
+        }
     }
 
     void ImuDriverNode::openPort()
     {
         try
         {
-            serial_port_.Open(port_name_);
+            serial_port_->Open(port_name_);
             // Convert baud rate to enum
             LibSerial::BaudRate baud_enum = LibSerial::BaudRate::BAUD_2000000;
             if (baud_rate_ == 115200)
@@ -107,10 +124,10 @@ namespace imu_data_node
                 RCLCPP_WARN(this->get_logger(), "Unsupported baud rate %d, defaulting to 2000000", baud_rate_);
                 baud_enum = LibSerial::BaudRate::BAUD_2000000;
             }
-            serial_port_.SetBaudRate(baud_enum);
-            serial_port_.SetCharacterSize(LibSerial::CharacterSize::CHAR_SIZE_8);
-            serial_port_.SetStopBits(LibSerial::StopBits::STOP_BITS_1);
-            serial_port_.SetParity(LibSerial::Parity::PARITY_NONE);
+            serial_port_->SetBaudRate(baud_enum);
+            serial_port_->SetCharacterSize(LibSerial::CharacterSize::CHAR_SIZE_8);
+            serial_port_->SetStopBits(LibSerial::StopBits::STOP_BITS_1);
+            serial_port_->SetParity(LibSerial::Parity::PARITY_NONE);
             // Note: libserial may not support all baud rates, adjust as needed
             RCLCPP_INFO(this->get_logger(), "Serial port opened successfully...");
         }
@@ -127,7 +144,7 @@ namespace imu_data_node
         auto it = RS485_COMMANDS.begin();
         std::advance(it, rs485_index_);
         const std::vector<uint8_t> &command = it->second;
-        serial_port_.Write(command);
+        serial_port_->Write(command);
         rs485_index_ = (rs485_index_ + 1) % RS485_COMMANDS.size();
     }
 
@@ -137,7 +154,7 @@ namespace imu_data_node
         {
             try
             {
-                size_t bytes_available = serial_port_.GetNumberOfBytesAvailable();
+                size_t bytes_available = serial_port_->GetNumberOfBytesAvailable();
                 if (protocol_ == ProtocolType::RS485)
                 {
                     rs485RequestData();
@@ -146,7 +163,7 @@ namespace imu_data_node
                 if (bytes_available > 0)
                 {
                     std::vector<uint8_t> buffer(bytes_available);
-                    serial_port_.Read(buffer, bytes_available);
+                    serial_port_->Read(buffer, bytes_available);
                     for (uint8_t byte : buffer)
                     {
                         bool has_angle = handleSerialData(byte);
@@ -161,7 +178,47 @@ namespace imu_data_node
             catch (const std::exception &e)
             {
                 RCLCPP_ERROR(this->get_logger(), "Error reading serial data: %s", e.what());
-                break;
+
+                // 串口瞬时掉线：尝试重开。重试期间 IMU 无数据，
+                // Locomotion 会因超时自动切换 Damping（安全保护），
+                // 重开成功后 IMU 恢复即可重新解锁。
+                bool reopened = false;
+                for (int attempt = 0; attempt < 5 && rclcpp::ok() && running_; ++attempt)
+                {
+                    std::this_thread::sleep_for(1s);
+                    try
+                    {
+                        try
+                        {
+                            serial_port_->Close();
+                        }
+                        catch (...) { /* 掉线状态下 Close 抛异常属预期 */ }
+                        serial_port_ = std::make_unique<LibSerial::SerialPort>();
+                        openPort();
+                        RCLCPP_WARN(this->get_logger(), "Serial port reopened (attempt %d)", attempt + 1);
+                        reopened = true;
+                        break;
+                    }
+                    catch (const std::exception &e2)
+                    {
+                        RCLCPP_ERROR(this->get_logger(), "Reopen serial port failed (attempt %d): %s",
+                                     attempt + 1, e2.what());
+                    }
+                }
+
+                if (reopened)
+                {
+                    consecutive_failures_ = 0;
+                }
+                else if (++consecutive_failures_ >= 10)
+                {
+                    // 串口设备彻底失联（约 2 分钟），停止重试并结束驱动线程，
+                    // 让 Locomotion 的 IMU 超时保护接管
+                    RCLCPP_FATAL(this->get_logger(),
+                                 "Serial port unreachable after %d retry rounds, IMU driver thread exiting",
+                                 consecutive_failures_);
+                    break;
+                }
             }
         }
     }
@@ -231,7 +288,8 @@ namespace imu_data_node
                 }
                 else
                 {
-                    RCLCPP_WARN(this->get_logger(), "0x51 Check failure");
+                    // 波特率不匹配时校验失败会高频刷屏，按 2 秒节流
+                    RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 2000, "0x51 Check failure");
                 }
             }
             else if (data_type == 0x52) // angular velocity
@@ -243,7 +301,7 @@ namespace imu_data_node
                 }
                 else
                 {
-                    RCLCPP_WARN(this->get_logger(), "0x52 Check failure");
+                    RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 2000, "0x52 Check failure");
                 }
             }
             else if (data_type == 0x53) // angle
@@ -256,7 +314,7 @@ namespace imu_data_node
                 }
                 else
                 {
-                    RCLCPP_WARN(this->get_logger(), "0x53 Check failure");
+                    RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 2000, "0x53 Check failure");
                 }
             }
             else if (data_type == 0x54) // magnetometer
@@ -268,7 +326,7 @@ namespace imu_data_node
                 }
                 else
                 {
-                    RCLCPP_WARN(this->get_logger(), "0x54 Check failure");
+                    RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 2000, "0x54 Check failure");
                 }
             }
             else
