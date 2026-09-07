@@ -44,7 +44,8 @@ Locomotion::Locomotion(std::shared_ptr<rclcpp::Node> node)
     require_imu_before_locomotion_(true),
     enable_action_safety_(true),
     startup_hold_seconds_(3.0),
-    action_delta_limit_(0.08f),
+    action_filter_alpha_(0.15f),
+    action_fade_in_seconds_(1.0),
     imu_timeout_(0.5),
       dt_(0.01),
             phase_period_(0.64),
@@ -111,7 +112,35 @@ void Locomotion::initialize()
         RCLCPP_ERROR(node_->get_logger(), "Locomotion model is not ready, inference thread will not start");
         return;
     }
-    
+
+    // 打开监控日志（对应 sim2sim 的 sim2sim_log_*.csv，另含 47 维 obs 输入）
+    if (enable_logging_)
+    {
+        std::time_t now = std::time(nullptr);
+        std::tm tm_buf{};
+        localtime_r(&now, &tm_buf);
+        char time_str[32];
+        std::strftime(time_str, sizeof(time_str), "%Y%m%d_%H%M%S", &tm_buf);
+        const std::string log_path = std::string("locomotion_log_") + time_str + ".csv";
+        log_file_.open(log_path);
+        if (log_file_.is_open())
+        {
+            log_file_ << "seq,t";
+            for (int i = 0; i < NUM_SINGLE_OBS; ++i) log_file_ << ",obs_" << i;
+            for (int i = 0; i < NUM_ACTIONS; ++i) log_file_ << ",act_policy_" << i;
+            for (int i = 0; i < NUM_ACTIONS; ++i) log_file_ << ",act_applied_" << i;
+            for (int i = 0; i < NUM_ACTIONS; ++i) log_file_ << ",target_q_" << i;
+            for (int i = 0; i < NUM_ACTIONS; ++i) log_file_ << ",q_curr_" << i;
+            for (int i = 0; i < NUM_ACTIONS; ++i) log_file_ << ",tau_motor_" << i;
+            log_file_ << "\n";
+            RCLCPP_INFO(node_->get_logger(), "Locomotion log file: %s", log_path.c_str());
+        }
+        else
+        {
+            RCLCPP_WARN(node_->get_logger(), "Failed to open log file: %s", log_path.c_str());
+        }
+    }
+
     // 启动推理线程
     counter_ = 0;
     init_time_ = std::chrono::steady_clock::now();
@@ -259,6 +288,10 @@ void Locomotion::exit()
             inference_thread_.join();
         }
     }
+    if (log_file_.is_open())
+    {
+        log_file_.close();
+    }
     FSM::exit();
 }
 
@@ -346,6 +379,7 @@ void Locomotion::initializeParameters()
 
     auto action_scale_param = getOrDeclareParameter<std::vector<double>>(
         node_, "action_scale", std::vector<double>{0.15, 0.25, 0.25, 0.25, 0.1, 0.1, 0.15, 0.25, 0.25, 0.25, 0.1, 0.1});
+        // node_, "action_scale", std::vector<double>{0.15, 0.25, 0.25, 0.25, 0.1, 0.1, 0.15, 0.25, 0.25, 0.25, 0.1, 0.1});
     if (action_scale_param.size() == NUM_ACTIONS)
     {
         for (int i = 0; i < NUM_ACTIONS; ++i)
@@ -372,7 +406,15 @@ void Locomotion::initializeParameters()
     imu_timeout_ = getOrDeclareParameter<double>(node_, "imu_timeout", 0.5);
 
     enable_action_safety_ = getOrDeclareParameter<bool>(node_, "enable_action_safety", true);
-    action_delta_limit_ = static_cast<float>(getOrDeclareParameter<double>(node_, "action_delta_limit", 0.08));
+    action_filter_alpha_ = static_cast<float>(getOrDeclareParameter<double>(node_, "action_filter_alpha", 0.15));
+    action_fade_in_seconds_ = getOrDeclareParameter<double>(node_, "action_fade_in_seconds", 1.0);
+
+    enable_logging_ = getOrDeclareParameter<bool>(node_, "enable_logging", true);
+    log_decimation_ = getOrDeclareParameter<int>(node_, "log_decimation", 1);
+    if (log_decimation_ <= 0)
+    {
+        log_decimation_ = 1;
+    }
 
     auto default_pose_param = getOrDeclareParameter<std::vector<double>>(
         node_, "default_pose", std::vector<double>{
@@ -569,7 +611,10 @@ void Locomotion::collectObservations()
         euler = current_euler_;
     }
 
-    const double phase = 2.0 * M_PI * static_cast<double>(counter_) * dt_ / phase_period_;
+    // 相位用墙钟而非循环计数：推理偶发超时不会拖慢步态时钟，且首帧对齐训练的 (sin,cos)=(0,1)
+    const double t_elapsed = std::chrono::duration<double>(
+        std::chrono::steady_clock::now() - init_time_).count();
+    const double phase = 2.0 * M_PI * t_elapsed / phase_period_;
     obs_current_.setZero();
     obs_current_(0) = static_cast<float>(std::sin(phase));
     obs_current_(1) = static_cast<float>(std::cos(phase));
@@ -761,19 +806,32 @@ void Locomotion::runInference()
     }
 
     const float *output_data = output_tensors[0].GetTensorData<float>();
+
+    // hold 结束后的线性渐入（<=0 关闭），消除 hold→policy 切换瞬间的目标跳变
+    float fade = 1.0f;
+    if (action_fade_in_seconds_ > 1e-6)
+    {
+        const double t_now = std::chrono::duration<double>(
+            std::chrono::steady_clock::now() - init_time_).count();
+        fade = static_cast<float>(
+            std::clamp((t_now - startup_hold_seconds_) / action_fade_in_seconds_, 0.0, 1.0));
+    }
+
+    Eigen::VectorXf policy_action = Eigen::VectorXf::Zero(NUM_ACTIONS);
     Eigen::VectorXf raw_action = Eigen::VectorXf::Zero(NUM_ACTIONS);
     Eigen::VectorXf scaled_action = Eigen::VectorXf::Zero(NUM_ACTIONS);
     for (int i = 0; i < NUM_ACTIONS; ++i)
     {
         float clipped = std::clamp(output_data[static_cast<size_t>(i)], -act_clip_, act_clip_);
+        policy_action(i) = clipped;
         if (enable_action_safety_)
         {
-            // 增量限幅：限制相邻帧动作突变（100Hz 控制率下的平滑约束）
-            const float delta = clipped - act_prev_(i);
-            clipped = act_prev_(i) + std::clamp(delta, -action_delta_limit_, action_delta_limit_);
+            // 一阶低通：训练 zrobot_env.step 的随机 delay 滤波同族（alpha∈[0,0.5]，此处取安全侧固定值）
+            clipped = (1.0f - action_filter_alpha_) * clipped + action_filter_alpha_ * act_prev_(i);
         }
-        raw_action(i) = clipped;
-        scaled_action(i) = clipped * action_scale_[i];
+        // 渐入后的值同时进 obs 动作历史，保持训练 self.actions "所见即所施加" 的语义
+        raw_action(i) = fade * clipped;
+        scaled_action(i) = raw_action(i) * action_scale_[i];
     }
 
     {
@@ -781,6 +839,69 @@ void Locomotion::runInference()
         act_scaled_ = scaled_action;
     }
     act_prev_ = raw_action;
+
+    if (log_file_.is_open() && counter_ % log_decimation_ == 0)
+    {
+        writeLogRow(policy_action, raw_action);
+    }
+}
+
+void Locomotion::writeLogRow(const Eigen::VectorXf& policy_action, const Eigen::VectorXf& applied_action)
+{
+    std::array<float, NUM_MOTORS> fb_pos{};
+    std::array<float, NUM_MOTORS> fb_tau{};
+    {
+        std::lock_guard<std::mutex> lock(feedback_mutex_);
+        fb_pos = feedback_positions_;
+        fb_tau = feedback_torques_;
+    }
+
+    // q_curr 为 URDF/策略空间（踝为 FK 机构角×sign），tau_motor 为电机原始力矩（踝取对应单电机）
+    Eigen::VectorXf q_curr = Eigen::VectorXf::Zero(NUM_ACTIONS);
+    Eigen::VectorXf target_q = Eigen::VectorXf::Zero(NUM_ACTIONS);
+    Eigen::VectorXf tau_fb = Eigen::VectorXf::Zero(NUM_ACTIONS);
+    for (int i = 0; i < NUM_ACTIONS; ++i)
+    {
+        target_q(i) = default_pose_(i) + applied_action(i) * action_scale_[i];
+        const int idx = dof_indices_[i];
+        if (idx < 0 || idx >= NUM_MOTORS)
+        {
+            continue;
+        }
+        tau_fb(i) = fb_tau[static_cast<size_t>(idx)];
+        if (i == IDX_L_FOOT_PITCH)
+        {
+            q_curr(i) = prev_L_pitch_ * joint_signs_[i];
+        }
+        else if (i == IDX_L_FOOT_ROLL)
+        {
+            q_curr(i) = prev_L_roll_ * joint_signs_[i];
+        }
+        else if (i == IDX_R_FOOT_PITCH)
+        {
+            q_curr(i) = prev_R_pitch_ * joint_signs_[i];
+        }
+        else if (i == IDX_R_FOOT_ROLL)
+        {
+            q_curr(i) = prev_R_roll_ * joint_signs_[i];
+        }
+        else
+        {
+            q_curr(i) = fb_pos[static_cast<size_t>(idx)] * joint_signs_[i];
+        }
+    }
+
+    const double t = std::chrono::duration<double>(
+        std::chrono::steady_clock::now() - init_time_).count();
+
+    log_file_ << counter_ << ',' << t;
+    for (int i = 0; i < NUM_SINGLE_OBS; ++i) log_file_ << ',' << obs_current_(i);
+    for (int i = 0; i < NUM_ACTIONS; ++i) log_file_ << ',' << policy_action(i);
+    for (int i = 0; i < NUM_ACTIONS; ++i) log_file_ << ',' << applied_action(i);
+    for (int i = 0; i < NUM_ACTIONS; ++i) log_file_ << ',' << target_q(i);
+    for (int i = 0; i < NUM_ACTIONS; ++i) log_file_ << ',' << q_curr(i);
+    for (int i = 0; i < NUM_ACTIONS; ++i) log_file_ << ',' << tau_fb(i);
+    log_file_ << '\n';
 }
 
 void Locomotion::inferenceLoop()
@@ -807,6 +928,15 @@ void Locomotion::inferenceLoop()
             RCLCPP_ERROR(node_->get_logger(), "Inference failed: %s", e.what());
             thread_running_ = false;
             break;
+        }
+
+        // 推理超预算会拉长循环周期（相位已改墙钟不受影响），及时暴露算力不足
+        const double work_seconds = std::chrono::duration<double>(Clock::now() - start).count();
+        if (work_seconds > 0.8 * dt_)
+        {
+            RCLCPP_WARN_THROTTLE(node_->get_logger(), *node_->get_clock(), 2000,
+                                 "Inference overran budget: %.1fms > %.1fms",
+                                 work_seconds * 1000.0, 0.8 * dt_ * 1000.0);
         }
 
         auto end = start + std::chrono::duration<double>(dt_);

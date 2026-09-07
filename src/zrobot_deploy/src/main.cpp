@@ -250,6 +250,13 @@ int main(int argc, char** argv)
                 RCLCPP_ERROR(node->get_logger(), "FSM run exception: %s", e.what());
                 current_fsm->exit();
                 current_fsm.reset();
+
+                // 关闭过程（Ctrl+C）触发的异常：直接退出主循环，
+                // 否则后续 spin_some 会在失效上下文上抛未捕获异常导致 terminate
+                if (!rclcpp::ok())
+                {
+                    break;
+                }
             }
 
             // 处理状态机内部发起的切换请求（如 IMU 超时 → Damping）
@@ -286,7 +293,16 @@ int main(int argc, char** argv)
         }
         
         // 处理 ROS 回调（非阻塞）
-        rclcpp::spin_some(node);
+        try
+        {
+            rclcpp::spin_some(node);
+        }
+        catch (const std::exception &e)
+        {
+            // 关闭竞态下 spin_some 可能抛 RCLError；直接退出主循环
+            RCLCPP_WARN(node->get_logger(), "spin_some exception, exiting loop: %s", e.what());
+            break;
+        }
         
         // 控制循环频率，根据循环实际耗时自动计算休眠时间
         rate.sleep();

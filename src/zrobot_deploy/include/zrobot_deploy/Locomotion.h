@@ -14,6 +14,8 @@
 #include <vector>
 #include <deque>
 #include <array>
+#include <fstream>
+#include <ctime>
 
 // Locomotion 状态机 - 使用 ONNX 模型进行强化学习推理控制
 class Locomotion : public FSM
@@ -81,7 +83,8 @@ private:
      bool require_imu_before_locomotion_;
      bool enable_action_safety_;
      double startup_hold_seconds_;
-     float action_delta_limit_;
+     float action_filter_alpha_;      // 动作一阶低通系数（训练 zrobot_env delay 滤波同族）
+     double action_fade_in_seconds_;  // hold 结束后动作线性渐入时长（<=0 关闭）
      std::chrono::steady_clock::time_point init_time_;
      std::chrono::steady_clock::time_point last_imu_time_;  // 最近一次 IMU 数据时间（sensor_data_mutex_ 保护）
      double imu_timeout_;                                   // IMU 数据超时阈值（秒），超时视为失联并保持姿态
@@ -98,8 +101,13 @@ private:
     float obs_scale_ang_vel_;                     // cmd角速度缩放
     float obs_scale_dof_pos_;                     // 关节角缩放
     float obs_scale_dof_vel_;                     // 关节速度缩放
-    int counter_;                                 // 循环计数器（用于相位计算）
+    int counter_;                                 // 推理循环计数（仅统计，相位改用墙钟）
     bool model_ready_;                            // 模型是否可推理
+
+    // 数据记录（CSV：obs 输入 + action 输出 + 目标/反馈，对齐 sim2sim 日志）
+    std::ofstream log_file_;
+    bool enable_logging_;
+    int log_decimation_;                          // 每 N 个推理周期写一行
 
     // IMU yaw 零偏（磁力计绝对航向 → 相对初始航向，与训练世界系 yaw≈0 对齐）
     double yaw_offset_ = 0.0;
@@ -145,6 +153,9 @@ private:
     
     // 执行 ONNX 推理
     void runInference();
+
+    // 写一行 CSV: seq,t,obs[47],act_policy[12],act_applied[12],target_q[12],q_curr[12],tau_motor[12]
+    void writeLogRow(const Eigen::VectorXf& policy_action, const Eigen::VectorXf& applied_action);
 };
 
 #endif // ZROBOT_DEPLOY_LOCOMOTION_H

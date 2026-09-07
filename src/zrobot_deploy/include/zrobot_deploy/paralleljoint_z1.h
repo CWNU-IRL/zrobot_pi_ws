@@ -15,10 +15,10 @@
 class ParallelAnkle {
 public:
     // 踝关节机械限位 (rad)
-    static constexpr double PITCH_MIN = -0.4;
-    static constexpr double PITCH_MAX =  0.4;
-    static constexpr double ROLL_MIN  = -0.1;
-    static constexpr double ROLL_MAX  =  0.1;
+    static constexpr double PITCH_MIN = -0.35;
+    static constexpr double PITCH_MAX =  0.35;
+    static constexpr double ROLL_MIN  = -0.2;
+    static constexpr double ROLL_MAX  =  0.2;
 
     struct IKResult {
         double theta1;   // 电机1角度 (rad)
