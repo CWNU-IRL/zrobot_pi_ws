@@ -8,12 +8,10 @@ Damping::Damping(std::shared_ptr<rclcpp::Node> node)
     : FSM(node)
     , is_initialized_(false)
     , feedback_seeded_(false)
-    , kd_default_(0.08f)
-    , velocity_deadband_(0.02f)
-    , max_position_delta_(0.15f)
+    , motor_kp_(0.0f)
+    , motor_kd_(2.0f)
 {
     current_state_ = FSMState::DAMPING;
-    damping_gains_.fill(kd_default_);
     command_positions_.fill(0.0f);
 
     RCLCPP_INFO(node_->get_logger(), "Damping FSM created");
@@ -36,33 +34,9 @@ void Damping::loadParameters()
         return static_cast<float>(value);
     };
 
-    kd_default_ = get_or_declare_double("damping.kd_default", 0.08);
-    velocity_deadband_ = get_or_declare_double("damping.velocity_deadband", 0.02);
-    max_position_delta_ = get_or_declare_double("damping.max_position_delta", 0.15);
-
-    std::vector<double> kd_per_joint;
-    if (node_->has_parameter("damping.kd_per_joint")) {
-        node_->get_parameter("damping.kd_per_joint", kd_per_joint);
-    } else {
-        kd_per_joint = node_->declare_parameter<std::vector<double>>("damping.kd_per_joint", std::vector<double>{});
-    }
-
-    damping_gains_.fill(kd_default_);
-    if (kd_per_joint.empty()) {
-        return;
-    }
-
-    if (kd_per_joint.size() != damping_gains_.size()) {
-        RCLCPP_WARN(
-            node_->get_logger(),
-            "damping.kd_per_joint size is %zu, expected %zu. Fallback to kd_default for all channels.",
-            kd_per_joint.size(), damping_gains_.size());
-        return;
-    }
-
-    for (size_t i = 0; i < damping_gains_.size(); ++i) {
-        damping_gains_[i] = static_cast<float>(kd_per_joint[i]);
-    }
+    // 电机内部原生阻尼增益：kp=0 无位置刚度（纯阻尼），kd 为粘性阻尼系数
+    motor_kp_ = get_or_declare_double("damping.motor_kp", 0.0);
+    motor_kd_ = get_or_declare_double("damping.motor_kd", 2.0);
 }
 
 void Damping::initialize()
@@ -95,10 +69,14 @@ void Damping::initialize()
     feedback_seeded_ = false;
     is_initialized_ = true;
 
+    // 电机原生阻尼：指令帧携带 kp=0/kd=motor_kd_，由电机内部速度环直接阻尼
+    command_kps_.fill(motor_kp_);
+    command_kds_.fill(motor_kd_);
+
     RCLCPP_INFO(
         node_->get_logger(),
-        "Damping initialized: kd_default=%.3f, velocity_deadband=%.3f, max_position_delta=%.3f",
-        kd_default_, velocity_deadband_, max_position_delta_);
+        "Damping initialized: motor_kp=%.3f, motor_kd=%.3f (native motor damping)",
+        motor_kp_, motor_kd_);
 }
 
 void Damping::run()
@@ -117,25 +95,15 @@ void Damping::run()
         return;
     }
 
+    // 原生阻尼：位置指令跟踪当前反馈（kp=0 时位置不产生力矩），
+    // 阻尼力矩由电机内部 τ = -kd·dq 实时产生，无外环延迟
     std::array<float, 23> feedback_positions;
     std::array<float, 23> feedback_velocities;
     std::array<float, 23> feedback_torques;
     std::array<float, 23> feedback_temperatures;
     getMotorFeedback(feedback_positions, feedback_velocities, feedback_torques, feedback_temperatures);
 
-    for (size_t i = 0; i < command_positions_.size(); ++i) {
-        float cmd = feedback_positions[i];
-        const float velocity = feedback_velocities[i];
-
-        if (std::fabs(velocity) >= velocity_deadband_) {
-            cmd -= damping_gains_[i] * velocity;
-        }
-
-        const float lower = feedback_positions[i] - max_position_delta_;
-        const float upper = feedback_positions[i] + max_position_delta_;
-        command_positions_[i] = std::clamp(cmd, lower, upper);
-    }
-
+    command_positions_ = feedback_positions;
     current_motor_positions_ = command_positions_;
 
     if (!sendMotorPositions(command_positions_)) {

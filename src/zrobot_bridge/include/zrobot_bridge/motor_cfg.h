@@ -338,6 +338,10 @@ public:
     float velocity_ = 0.0;
     float torque_ = 0.0;
     float temperature_ = 0.0;
+    // 最近故障码（0=无故障；收到正常状态帧后清零。2=欠压，含义见电机手册）
+    int fault_code_ = 0;
+    // 累计故障帧计数（自节点启动起）
+    unsigned long fault_count_ = 0;
 
     uint8_t error_code = 0;
     uint8_t pattern = 0;

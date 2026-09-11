@@ -70,6 +70,11 @@ protected:
     
     // 当前电机位置
     std::array<float, 23> current_motor_positions_;
+
+    // 每电机指令增益（随服务请求下发；全 0 = 桥接层沿用配置增益。
+    // Damping 用 kp=0/kd>0 实现电机内部原生阻尼）
+    std::array<float, 23> command_kps_;
+    std::array<float, 23> command_kds_;
     
     // 电机反馈缓存（static 跨 FSM 实例共享：状态机切换时新实例可继承最近一次
     // 成功反馈，避免 Damping 在位置读取失败时无有效缓存可用）
@@ -77,6 +82,8 @@ protected:
     static std::array<float, 23> feedback_velocities_;
     static std::array<float, 23> feedback_torques_;
     static std::array<float, 23> feedback_temperatures_;
+    // 每电机活动故障码（0=无，2=欠压等；随 sendMotorPositions 应答更新）
+    static std::array<int32_t, 23> feedback_fault_codes_;
 
     // 是否曾经成功接收过电机反馈（Damping 用它判断缓存反馈能否作为阻尼基准）
     static std::atomic<bool> feedback_valid_;

@@ -84,13 +84,15 @@ def pd_control(target_q, q, kp, target_dq, dq, kd):
     '''
     return (target_q - q) * kp + (target_dq - dq) * kd
 
-def run_mujoco(policy, cfg):
+def run_mujoco(policy, cfg, suspend=False, suspend_height=None):
     """
     Run the Mujoco simulation using the provided policy and configuration.
 
     Args:
         policy: The policy used for controlling the simulation.
         cfg: The configuration object containing simulation settings.
+        suspend: If True, 用虚拟吊架将机器人吊起进行仿真.
+        suspend_height: 吊起时基座目标高度(m)，None 表示保持初始高度.
 
     Returns:
         None
@@ -100,6 +102,23 @@ def run_mujoco(policy, cfg):
     data = mujoco.MjData(model)
     mujoco.mj_step(model, data)
     viewer = mujoco_viewer.MujocoViewer(model, data)
+
+    # ---- 虚拟吊架（吊起仿真）----
+    # 通过 data.xfrc_applied 在 chest_head_link 上施加（世界系，作用于该 body 质心）：
+    #   力 = 重力补偿 + 位置 PD（基座 x/y 锁定在初始位置，z 锁定在目标高度）
+    #   力矩 = 姿态 PD（保持竖直、锁定偏航）
+    if suspend:
+        harness_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, 'chest_head_link')
+        total_mass = mujoco.mj_getTotalmass(model)
+        if suspend_height is None:
+            suspend_height = data.qpos[2]  # 默认保持初始高度
+        p_des = np.array([data.qpos[0], data.qpos[1], suspend_height], dtype=np.double)
+        print(f"吊起仿真: 基座目标高度 {suspend_height:.3f} m, 总质量 {total_mass:.2f} kg")
+
+    harness_kp_pos = np.array([2000.0, 2000.0, 3000.0], dtype=np.double)
+    harness_kd_pos = np.array([200.0, 200.0, 300.0], dtype=np.double)
+    harness_kp_rot = 400.0
+    harness_kd_rot = 60.0
 
     target_q = np.zeros((cfg.env.num_actions), dtype=np.double)
     action = np.zeros((cfg.env.num_actions), dtype=np.double)
@@ -175,7 +194,7 @@ def run_mujoco(policy, cfg):
             action[:] = policy(torch.tensor(policy_input))[0].detach().numpy()
             action = np.clip(action, -cfg.normalization.clip_actions, cfg.normalization.clip_actions)
 
-            if count_lowlevel>1000:
+            if count_lowlevel>300:
                 as_scale = cfg.control.action_scale
                 if isinstance(as_scale, dict):
                     # joint order: hip_roll, hip_yaw, hip_pitch, knee, foot_pitch, foot_roll (x2 L/R)
@@ -211,6 +230,19 @@ def run_mujoco(policy, cfg):
             for j in range(12):
                 log_file.write(f"{count_lowlevel},{joint_names[j]},{action[j]:.6f},{target_q[j]:.6f},{q[j]:.6f},{tau[j]:.6f}\n")
 
+        if suspend:
+            # 位置 PD + 重力补偿（世界系）
+            force = harness_kp_pos * (p_des - data.qpos[0:3]) - harness_kd_pos * data.qvel[0:3]
+            force[2] += total_mass * (-model.opt.gravity[2])
+            # 姿态 PD：保持竖直（世界系）
+            r_cur = R.from_quat(data.sensor('orientation').data[[1, 2, 3, 0]])
+            omega_world = r_cur.apply(data.sensor('angular-velocity').data)
+            rot_err = (R.identity() * r_cur.inv()).as_rotvec()
+            torque = harness_kp_rot * rot_err - harness_kd_rot * omega_world
+
+            data.xfrc_applied[harness_id, :3] = force
+            data.xfrc_applied[harness_id, 3:] = torque
+
         mujoco.mj_step(model, data)
         viewer.render()
         count_lowlevel += 1
@@ -227,6 +259,9 @@ if __name__ == '__main__':
     parser.add_argument('--load_model', type=str, default='/home/c112/codes/chen_human/humanoid26_6_8/humanoid-gym/logs/zrobot_ppo/exported/policies/policy_1.pt',
                         help='Run to load from.')
     parser.add_argument('--terrain', action='store_true', default='plane', help='terrain or plane')
+    parser.add_argument('--suspend', action='store_true', help='吊起仿真：用虚拟吊架吊住基座，脚离地')
+    parser.add_argument('--suspend_height', type=float, default=None,
+                        help='吊起时基座目标高度(m)，默认保持初始高度(0.8m)')
     args = parser.parse_args()
 
     class Sim2simCfg(ZRobotCfg):
@@ -253,4 +288,5 @@ if __name__ == '__main__':
                                    51, 51, 102, 102, 14.45, 14.45], dtype=np.double)
 
     policy = torch.jit.load(args.load_model)
-    run_mujoco(policy, Sim2simCfg())
+    run_mujoco(policy, Sim2simCfg(), suspend=args.suspend, suspend_height=args.suspend_height)
+

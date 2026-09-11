@@ -138,8 +138,8 @@ class ZRobotCfg(LeggedRobotCfg):
         #                 'knee': 3, 'foot': 3}
 
         # action scale: target angle = actionScale * action + defaultAngle
-        action_scale = {'hip_roll': 0.15, 'hip_pitch': 0.25, 'hip_yaw': 0.25,
-                        'knee': 0.25, 'foot': 0.1}
+        action_scale = {'hip_roll': 0.075, 'hip_pitch': 0.125, 'hip_yaw': 0.125,
+                        'knee': 0.125, 'foot': 0.05}
         # decimation: Number of control action updates @ sim DT per policy DT
         decimation = 10  # 100hz
 

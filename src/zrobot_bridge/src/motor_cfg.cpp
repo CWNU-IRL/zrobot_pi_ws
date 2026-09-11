@@ -156,6 +156,8 @@ bool RobStrideMotor::receive_feedback_until(std::chrono::steady_clock::time_poin
         if (communication_type == Communication_Type_ErrorFeedback)
         {
             // 故障反馈帧(0x15)：data[0] 为故障码（含义见电机手册），记录后继续等待
+            fault_code_ = static_cast<int>(data[0]);
+            ++fault_count_;
             static unsigned long err_frame_count = 0;
             if (++err_frame_count % 200 == 0)
             {
@@ -168,6 +170,7 @@ bool RobStrideMotor::receive_feedback_until(std::chrono::steady_clock::time_poin
 
         if (try_parse_frame(communication_type, data))
         {
+            fault_code_ = 0;  // 正常状态帧到达，清除活动故障标记
             return true;
         }
     }

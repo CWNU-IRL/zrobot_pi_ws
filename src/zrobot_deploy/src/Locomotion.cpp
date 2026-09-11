@@ -45,13 +45,13 @@ Locomotion::Locomotion(std::shared_ptr<rclcpp::Node> node)
     enable_action_safety_(true),
     startup_hold_seconds_(3.0),
     action_filter_alpha_(0.15f),
-    action_fade_in_seconds_(1.0),
+    action_fade_in_seconds_(3.0),
     imu_timeout_(0.5),
       dt_(0.01),
             phase_period_(0.64),
             frame_stack_(15),
             model_obs_dim_(NUM_SINGLE_OBS * 15),
-            action_scale_{0.15f, 0.25f, 0.25f, 0.25f, 0.1f, 0.1f, 0.15f, 0.25f, 0.25f, 0.25f, 0.1f, 0.1f},
+            action_scale_{0.075f, 0.125f, 0.125f, 0.125f, 0.05f, 0.05f, 0.075f, 0.125f, 0.125f, 0.125f, 0.05f, 0.05f},
             obs_clip_(18.0f),
             act_clip_(18.0f),
             obs_scale_lin_vel_(2.0f),
@@ -159,6 +159,34 @@ void Locomotion::run()
     {
         RCLCPP_WARN(node_->get_logger(), "Locomotion inference thread not running");
         return;
+    }
+
+    // 电机故障防护（桥接层随反馈上报，2=欠压）：立即停机切 Damping，
+    // 避免欠压↔恢复极限环下继续发大力矩目标反复拉垮母线
+    {
+        int fault_idx = -1;
+        int32_t fault_code = 0;
+        {
+            std::lock_guard<std::mutex> lock(feedback_mutex_);
+            for (int i = 0; i < NUM_MOTORS; ++i)
+            {
+                if (feedback_fault_codes_[static_cast<size_t>(i)] != 0)
+                {
+                    fault_idx = i;
+                    fault_code = feedback_fault_codes_[static_cast<size_t>(i)];
+                    break;
+                }
+            }
+        }
+        if (fault_idx >= 0)
+        {
+            RCLCPP_ERROR(node_->get_logger(),
+                         "Motor %d fault (code=%d, 2=undervoltage), switching to Damping",
+                         fault_idx, static_cast<int>(fault_code));
+            requestSwitch(FSMState::DAMPING);
+            exit();
+            return;
+        }
     }
 
     const auto elapsed = std::chrono::duration<double>(Clock::now() - init_time_).count();
@@ -377,9 +405,9 @@ void Locomotion::initializeParameters()
     frame_stack_ = getOrDeclareParameter<int>(node_, "frame_stack", 15);
     model_obs_dim_ = getOrDeclareParameter<int>(node_, "model_obs_dim", NUM_SINGLE_OBS * frame_stack_);
 
+    // 架空验证期临时×0.2（训练值 {0.15,0.25,0.25,0.25,0.1,0.1}×2，落地稳定后恢复）
     auto action_scale_param = getOrDeclareParameter<std::vector<double>>(
-        node_, "action_scale", std::vector<double>{0.15, 0.25, 0.25, 0.25, 0.1, 0.1, 0.15, 0.25, 0.25, 0.25, 0.1, 0.1});
-        // node_, "action_scale", std::vector<double>{0.15, 0.25, 0.25, 0.25, 0.1, 0.1, 0.15, 0.25, 0.25, 0.25, 0.1, 0.1});
+        node_, "action_scale", std::vector<double>{0.075,0.125,0.125,0.125,0.05,0.05,0.075,0.125,0.125,0.125,0.05,0.05});
     if (action_scale_param.size() == NUM_ACTIONS)
     {
         for (int i = 0; i < NUM_ACTIONS; ++i)
@@ -407,7 +435,7 @@ void Locomotion::initializeParameters()
 
     enable_action_safety_ = getOrDeclareParameter<bool>(node_, "enable_action_safety", true);
     action_filter_alpha_ = static_cast<float>(getOrDeclareParameter<double>(node_, "action_filter_alpha", 0.15));
-    action_fade_in_seconds_ = getOrDeclareParameter<double>(node_, "action_fade_in_seconds", 1.0);
+    action_fade_in_seconds_ = getOrDeclareParameter<double>(node_, "action_fade_in_seconds", 3.0);
 
     enable_logging_ = getOrDeclareParameter<bool>(node_, "enable_logging", true);
     log_decimation_ = getOrDeclareParameter<int>(node_, "log_decimation", 1);

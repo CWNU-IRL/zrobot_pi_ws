@@ -263,6 +263,18 @@ void MotorControllerNode::handle_rob_stride_service(
     // 初始化响应数据
     try
     {
+        // 请求级增益覆盖：kds 任意一项非零视为显式指定（Damping 模式 kp=0/kd>0），
+        // 全零则沿用配置文件 motor_kps/motor_kds（FixStand/Locomotion 训练增益）
+        bool use_request_gains = false;
+        for (int i = 0; i < NUM_MOTORS; ++i)
+        {
+            if (request->kds[i] != 0.0f)
+            {
+                use_request_gains = true;
+                break;
+            }
+        }
+
         // 阶段 1：批量发送所有电机的运控指令（不等待反馈）。
         // 串行"发一收一"会把每台电机的响应延迟累加（慢电机 20-30ms/台），
         // 批量发送后电机响应并行到达，服务总耗时 ≈ 发送时间 + 最长响应延迟。
@@ -275,6 +287,8 @@ void MotorControllerNode::handle_rob_stride_service(
             }
 
             float target_position = request->positions[i];
+            const float kp = use_request_gains ? request->kps[i] : motor_kps_[i];
+            const float kd = use_request_gains ? request->kds[i] : motor_kds_[i];
 
             // TODO Motor Angle 
             // if (i == ) {target_position = -target_position}
@@ -287,8 +301,8 @@ void MotorControllerNode::handle_rob_stride_service(
                     0.0f,            // torque
                     target_position, // position (rad)
                     0.0f,            // velocity (rad/s)
-                    motor_kps_[i],   // kp
-                    motor_kds_[i]    // kd
+                    kp,
+                    kd
                 );
             }
             catch (const std::exception &e)
@@ -357,6 +371,8 @@ void MotorControllerNode::handle_rob_stride_service(
             response->feedback_velocities[i] = motors_[i]->velocity_;
             response->feedback_torques[i] = motors_[i]->torque_;
             response->feedback_temperatures[i] = motors_[i]->temperature_;
+            response->fault_codes[i] = motors_[i]->fault_code_;
+            response->fault_counts[i] = static_cast<int32_t>(motors_[i]->fault_count_);
         }
 
         response->success = true;

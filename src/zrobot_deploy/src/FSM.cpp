@@ -5,6 +5,7 @@ std::array<float, 23> FSM::feedback_positions_{};
 std::array<float, 23> FSM::feedback_velocities_{};
 std::array<float, 23> FSM::feedback_torques_{};
 std::array<float, 23> FSM::feedback_temperatures_{};
+std::array<int32_t, 23> FSM::feedback_fault_codes_{};
 std::atomic<bool> FSM::feedback_valid_{false};
 std::mutex FSM::feedback_mutex_;
 
@@ -15,6 +16,9 @@ FSM::FSM(std::shared_ptr<rclcpp::Node> node)
 {
     // 初始化（反馈缓存为 static，跨实例保留，不在此清零）
     current_motor_positions_.fill(0.0f);
+    // 指令增益默认全 0：桥接层沿用配置文件 motor_kps/motor_kds
+    command_kps_.fill(0.0f);
+    command_kds_.fill(0.0f);
 
     // 创建服务客户端
     control_client_ = node_->create_client<rs_interface::srv::RobStrideMsgs>("/rob_stride_control");
@@ -94,6 +98,8 @@ bool FSM::sendMotorPositions(const std::array<float, 23>& positions)
     // 创建服务请求对象
     auto request = std::make_shared<rs_interface::srv::RobStrideMsgs::Request>();
     request->positions = positions;
+    request->kps = command_kps_;
+    request->kds = command_kds_;
     
     // 异步发送服务请求
     auto future = control_client_->async_send_request(request);
@@ -110,6 +116,7 @@ bool FSM::sendMotorPositions(const std::array<float, 23>& positions)
                 feedback_velocities_[i] = response->feedback_velocities[i];
                 feedback_torques_[i] = response->feedback_torques[i];
                 feedback_temperatures_[i] = response->feedback_temperatures[i];
+                feedback_fault_codes_[i] = response->fault_codes[i];
             }
             feedback_valid_ = true;
         }
