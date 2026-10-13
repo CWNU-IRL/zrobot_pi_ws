@@ -12,6 +12,7 @@ endif()
 find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(rs_interface REQUIRED)
+find_package(battery_control REQUIRED)
 find_package(std_msgs REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(geometry_msgs REQUIRED)
@@ -58,6 +59,7 @@ add_executable(main src/main.cpp
 ament_target_dependencies(main
         rclcpp
         rs_interface
+        battery_control
         std_msgs
         sensor_msgs
         geometry_msgs

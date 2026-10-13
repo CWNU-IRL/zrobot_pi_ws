@@ -1,0 +1,6 @@
+# 强制关机（被动指令 0x04EF bit3，会切断电池输出！）
+bool confirm                     # 必须显式传 true 才执行（防误触）
+---
+bool success
+string message
+int32 frames_sent                # 实际发送的指令帧数

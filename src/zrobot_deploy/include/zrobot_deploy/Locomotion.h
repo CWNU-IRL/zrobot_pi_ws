@@ -5,6 +5,7 @@
 #include "zrobot_deploy/paralleljoint_z1.h"
 #include <sensor_msgs/msg/imu.hpp>
 #include <geometry_msgs/msg/twist.hpp>
+#include <battery_control/msg/battery_status.hpp>
 #include <onnxruntime_cxx_api.h>
 #include <Eigen/Dense>
 #include <thread>
@@ -56,6 +57,9 @@ private:
     Eigen::VectorXf act_prev_;        // 上一次原始动作 (12维)
     Eigen::VectorXf act_scaled_;      // 缩放后的动作增量 (12维)
     Eigen::VectorXf act_temp_;        // 临时动作缓冲（用于线程安全复制）
+    // 策略关节空间测量快照（非踝=反馈×sign，踝=FK 关节角×sign，与日志 q_curr 同口径；
+    // 推理线程写、run() 读，action_mutex_ 保护）
+    std::array<float, NUM_ACTIONS> joint_meas_{};
     Eigen::VectorXf default_pose_;    // 默认姿态 (12维)
     std::array<int, NUM_ACTIONS> dof_indices_;   // 12维策略动作映射到23维电机索引
     std::array<float, NUM_ACTIONS> joint_signs_; // 每个关节动作的符号翻转 (±1.0)，用于匹配仿真→实物方向
@@ -63,6 +67,15 @@ private:
     // ===== ROS 话题订阅相关 =====
     rclcpp::Subscription<sensor_msgs::msg::Imu>::SharedPtr imu_sub_;
     rclcpp::Subscription<geometry_msgs::msg::Twist>::SharedPtr cmd_sub_;
+    // 电池遥测（/battery/status，BMS 2Hz）：电压/电流写入 CSV 并用于欠压保护
+    rclcpp::Subscription<battery_control::msg::BatteryStatus>::SharedPtr battery_sub_;
+    std::mutex battery_mutex_;
+    bool battery_received_ = false;
+    double batt_voltage_ = 0.0;   // V（0=无效）
+    double batt_current_ = 0.0;   // A（放电为正；心跳帧来源时无电流值）
+    int batt_soc_ = -1;           // %
+    bool batt_online_ = true;     // BMS 链路在线（false=状态可能为冻结旧值）
+    std::chrono::steady_clock::time_point last_battery_time_;
     
     // 当前传感器数据
     Eigen::Vector3f current_angular_velocity_;   // 角速度 (3维)
@@ -88,7 +101,10 @@ private:
      std::chrono::steady_clock::time_point init_time_;
      std::chrono::steady_clock::time_point last_imu_time_;  // 最近一次 IMU 数据时间（sensor_data_mutex_ 保护）
      double imu_timeout_;                                   // IMU 数据超时阈值（秒），超时视为失联并保持姿态
-    
+     // 欠压保护（BMS 电压）：低于 warn 打点告警，低于 trip 切 Damping（<=0 关闭）
+     double vbus_warn_threshold_;     // V
+     double vbus_trip_threshold_;     // V
+
     // ===== 控制参数 =====
     double dt_;                                   // 控制周期 (秒)
     double phase_period_;                         // 相位周期 (秒)
@@ -108,6 +124,19 @@ private:
     std::ofstream log_file_;
     bool enable_logging_;
     int log_decimation_;                          // 每 N 个推理周期写一行
+
+    // ===== CSV 轨迹回放（诊断）：用 sim2sim 日志的策略目标/仿真实测替代策略输出 =====
+    std::string replay_mode_;       // off / target_q / q_curr
+    std::string replay_csv_path_;
+    bool replay_loaded_ = false;
+    std::vector<std::array<float, NUM_ACTIONS>> replay_target_;  // [帧][12] 策略空间绝对角(rad)
+    std::vector<std::array<float, NUM_ACTIONS>> replay_qcurr_;
+    // 仿真时钟常量：sim 相位钟 hold 期间不冻结，step300 已走 0.3s 相位
+    static constexpr long kReplayStartStep = 300;
+    static constexpr double kReplaySimDt = 0.001;
+    double replay_phase_offset_ = 0.0;      // 回放模式相位钟前移量（秒），非回放=0
+    double replay_handoff_seconds_ = -1.0;  // <0=回放至 CSV 末尾；>=0 motion_t 到点后策略接管
+    bool replay_handed_off_ = false;        // 交接是否已发生（打点用）
 
     // IMU yaw 零偏（磁力计绝对航向 → 相对初始航向，与训练世界系 yaw≈0 对齐）
     double yaw_offset_ = 0.0;
@@ -132,6 +161,9 @@ private:
 
     // 加载 ONNX 模型
     void loadPolicy(const std::string& model_path);
+
+    // 加载 sim2sim 回放 CSV（长格式 step,joint,action,target_q,q_curr,tau；仅取 step>=300）
+    bool loadReplayCsv(const std::string& path);
     
     // 推理线程函数
     void inferenceLoop();
@@ -144,6 +176,7 @@ private:
     // ROS 回调函数
     void imuCallback(const sensor_msgs::msg::Imu::SharedPtr msg);
     void cmdCallback(const geometry_msgs::msg::Twist::SharedPtr msg);
+    void batteryCallback(const battery_control::msg::BatteryStatus::SharedPtr msg);
     
     // 初始化参数
     void initializeParameters();

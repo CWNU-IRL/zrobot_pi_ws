@@ -3,7 +3,11 @@
 #include <tf2/LinearMath/Matrix3x3.h>
 #include <algorithm>
 #include <cmath>
+#include <csignal>
+#include <fstream>
+#include <sstream>
 #include <stdexcept>
+#include <unordered_map>
 #include <vector>
 
 namespace {
@@ -42,16 +46,18 @@ Locomotion::Locomotion(std::shared_ptr<rclcpp::Node> node)
     imu_received_(false),
     motor_feedback_ready_(false),
     require_imu_before_locomotion_(true),
-    enable_action_safety_(true),
-    startup_hold_seconds_(3.0),
+    enable_action_safety_(false),
+    startup_hold_seconds_(0.0),
     action_filter_alpha_(0.15f),
-    action_fade_in_seconds_(3.0),
+    action_fade_in_seconds_(0.0),
+    vbus_warn_threshold_(0.0),
+    vbus_trip_threshold_(0.0),
     imu_timeout_(0.5),
       dt_(0.01),
             phase_period_(0.64),
             frame_stack_(15),
             model_obs_dim_(NUM_SINGLE_OBS * 15),
-            action_scale_{0.075f, 0.125f, 0.125f, 0.125f, 0.05f, 0.05f, 0.075f, 0.125f, 0.125f, 0.125f, 0.05f, 0.05f},
+            action_scale_{0.15f, 0.25f, 0.25f, 0.25f, 0.1f, 0.1f, 0.15f, 0.25f, 0.25f, 0.25f, 0.1f, 0.1f},
             obs_clip_(18.0f),
             act_clip_(18.0f),
             obs_scale_lin_vel_(2.0f),
@@ -102,10 +108,36 @@ void Locomotion::initialize()
         10,
         std::bind(&Locomotion::cmdCallback, this, std::placeholders::_1));
 
+    // 电池遥测：BMS 电压/电流进 CSV，并为欠压保护提供数据（节点未启动时仅无该列保护）
+    battery_sub_ = node_->create_subscription<battery_control::msg::BatteryStatus>(
+        getOrDeclareParameter<std::string>(node_, "battery_topic", "/battery/status"),
+        10,
+        std::bind(&Locomotion::batteryCallback, this, std::placeholders::_1));
+
     // 加载 ONNX 模型
     const auto model_path = getOrDeclareParameter<std::string>(
         node_, "onnx_model_path", std::string(POLICY_DIR) + "/policy.onnx");
     loadPolicy(model_path);
+
+    // 回放模式：加载 sim2sim 轨迹 CSV；失败则显式回退策略控制（不静默）
+    if (replay_mode_ != "off")
+    {
+        if (loadReplayCsv(replay_csv_path_))
+        {
+            RCLCPP_INFO(node_->get_logger(),
+                        "Replay mode ACTIVE: source=%s, frames=%zu (%.1fs @ %.0fHz)",
+                        replay_mode_.c_str(), replay_target_.size(),
+                        replay_target_.size() * dt_, 1.0 / dt_);
+        }
+        else
+        {
+            RCLCPP_ERROR(node_->get_logger(),
+                         "replay_mode=%s but CSV '%s' load failed, falling back to policy control",
+                         replay_mode_.c_str(), replay_csv_path_.c_str());
+            replay_mode_ = "off";
+            replay_loaded_ = false;
+        }
+    }
 
     if (!model_ready_)
     {
@@ -132,6 +164,7 @@ void Locomotion::initialize()
             for (int i = 0; i < NUM_ACTIONS; ++i) log_file_ << ",target_q_" << i;
             for (int i = 0; i < NUM_ACTIONS; ++i) log_file_ << ",q_curr_" << i;
             for (int i = 0; i < NUM_ACTIONS; ++i) log_file_ << ",tau_motor_" << i;
+            log_file_ << ",vbus,soc,batt_current";
             log_file_ << "\n";
             RCLCPP_INFO(node_->get_logger(), "Locomotion log file: %s", log_path.c_str());
         }
@@ -184,6 +217,107 @@ void Locomotion::run()
                          "Motor %d fault (code=%d, 2=undervoltage), switching to Damping",
                          fault_idx, static_cast<int>(fault_code));
             requestSwitch(FSMState::DAMPING);
+            exit();
+            return;
+        }
+    }
+
+    // 电池欠压保护：BMS 电压低于阈值（默认 0=关闭）时告警或切 Damping，
+    // 在电机级欠压故障码出现前争取主动停机窗口
+    {
+        bool battery_ok = false;
+        bool battery_online = true;
+        double voltage = 0.0;
+        {
+            std::lock_guard<std::mutex> lock(battery_mutex_);
+            voltage = batt_voltage_;
+            battery_online = batt_online_;
+            battery_ok = battery_received_ &&
+                         std::chrono::duration<double>(
+                             std::chrono::steady_clock::now() - last_battery_time_).count() < 5.0;
+        }
+        if (battery_ok && voltage > 0.5)
+        {
+            if (!battery_online)
+            {
+                RCLCPP_WARN_THROTTLE(
+                    node_->get_logger(), *node_->get_clock(), 5000,
+                    "Battery reports offline (BMS link stale), vbus/current values may be frozen");
+            }
+            if (vbus_trip_threshold_ > 0.0 && voltage < vbus_trip_threshold_)
+            {
+                RCLCPP_ERROR(node_->get_logger(),
+                             "Battery voltage %.2f V below trip threshold %.2f V, "
+                             "switching to Damping",
+                             voltage, vbus_trip_threshold_);
+                requestSwitch(FSMState::DAMPING);
+                exit();
+                return;
+            }
+            if (vbus_warn_threshold_ > 0.0 && voltage < vbus_warn_threshold_)
+            {
+                RCLCPP_WARN_THROTTLE(
+                    node_->get_logger(), *node_->get_clock(), 1000,
+                    "Battery voltage %.2f V below warn threshold %.2f V",
+                    voltage, vbus_warn_threshold_);
+            }
+        }
+        else if (battery_received_)
+        {
+            RCLCPP_WARN_THROTTLE(
+                node_->get_logger(), *node_->get_clock(), 5000,
+                "Battery telemetry stale (>5s no update), low-voltage protection inactive");
+        }
+    }
+
+    // 关节超限保护：任一关节测量值超限（踝为 FK 关节角，与日志 q_curr 同口径），
+    // 按配置立即失能或切 Damping
+    if (joint_limit_enable_)
+    {
+        std::array<float, NUM_ACTIONS> q_meas{};
+        {
+            std::lock_guard<std::mutex> lock(action_mutex_);
+            q_meas = joint_meas_;
+        }
+        int joint_idx = -1;
+        float q_val = 0.0f;
+        if (jointLimitViolated(q_meas, joint_idx, q_val))
+        {
+            RCLCPP_ERROR(node_->get_logger(),
+                         "Joint %d (motor %d) position %.3f rad outside limits [%.3f, %.3f], triggering action %d",
+                         joint_idx, dof_indices_[static_cast<size_t>(joint_idx)], q_val,
+                         joint_limit_lower_[static_cast<size_t>(joint_idx)],
+                         joint_limit_upper_[static_cast<size_t>(joint_idx)],
+                         joint_limit_action_);
+            if (joint_limit_action_ == 1)
+            {
+                // 失能失败（服务不可达等）时回退 Damping，避免电机保持大力矩失控
+                if (!disableAllMotors())
+                {
+                    RCLCPP_ERROR(node_->get_logger(),
+                                 "Disable failed, falling back to Damping");
+                    requestSwitch(FSMState::DAMPING);
+                }
+                else
+                {
+                    // 电机已失能：先命令电池强制关机切断输出，再结束进程；
+                    // 关机失败不回退（电机已失能），仅记录并继续终止
+                    if (!forceBatteryShutdown())
+                    {
+                        RCLCPP_ERROR(node_->get_logger(),
+                                     "Battery force shutdown failed, terminating anyway");
+                    }
+                    // 失能+关机完成后：发 SIGINT 结束进程，等效终端 Ctrl+C
+                    // （rclcpp 触发 shutdown，主循环经 spin_some 异常路径干净退出）
+                    RCLCPP_FATAL(node_->get_logger(),
+                                 "Motors disabled after joint limit, terminating process");
+                    std::raise(SIGINT);
+                }
+            }
+            else
+            {
+                requestSwitch(FSMState::DAMPING);
+            }
             exit();
             return;
         }
@@ -398,6 +532,116 @@ void Locomotion::loadPolicy(const std::string &model_path)
     }
 }
 
+// 解析 sim2sim 长格式日志（step,joint,action,target_q,q_curr,tau，每 10ms 一帧 12 行）。
+// 仅保留 step>=300（仿真 hold 段之后）的完整帧，按文件顺序作为回放序列
+bool Locomotion::loadReplayCsv(const std::string &path)
+{
+    replay_loaded_ = false;
+    replay_target_.clear();
+    replay_qcurr_.clear();
+    replay_phase_offset_ = 0.0;
+    replay_handed_off_ = false;
+
+    std::ifstream file(path);
+    if (!file.is_open())
+    {
+        RCLCPP_ERROR(node_->get_logger(), "Replay CSV not found: %s", path.c_str());
+        return false;
+    }
+
+    static const std::unordered_map<std::string, int> kJointIndex = {
+        {"L_hip_roll", 0}, {"L_hip_yaw", 1}, {"L_hip_pitch", 2}, {"L_knee", 3},
+        {"L_foot_pitch", 4}, {"L_foot_roll", 5},
+        {"R_hip_roll", 6}, {"R_hip_yaw", 7}, {"R_hip_pitch", 8}, {"R_knee", 9},
+        {"R_foot_pitch", 10}, {"R_foot_roll", 11},
+    };
+    constexpr long kStartStep = kReplayStartStep;
+
+    std::string line;
+    if (!std::getline(file, line))
+    {
+        RCLCPP_ERROR(node_->get_logger(), "Replay CSV is empty: %s", path.c_str());
+        return false;
+    }
+
+    long cur_step = -1;
+    int filled = 0;
+    long malformed = 0;
+    std::array<float, NUM_ACTIONS> tgt{};
+    std::array<float, NUM_ACTIONS> qcr{};
+
+    auto pushGroup = [&](long step)
+    {
+        if (filled == NUM_ACTIONS && step >= kStartStep)
+        {
+            replay_target_.push_back(tgt);
+            replay_qcurr_.push_back(qcr);
+        }
+    };
+
+    try
+    {
+        while (std::getline(file, line))
+        {
+            if (line.empty())
+            {
+                continue;
+            }
+            std::stringstream ss(line);
+            std::string step_str, joint, action_str, target_str, qcurr_str;
+            if (!std::getline(ss, step_str, ',') || !std::getline(ss, joint, ',') ||
+                !std::getline(ss, action_str, ',') || !std::getline(ss, target_str, ',') ||
+                !std::getline(ss, qcurr_str, ','))
+            {
+                ++malformed;
+                continue;
+            }
+            const auto it = kJointIndex.find(joint);
+            if (it == kJointIndex.end())
+            {
+                continue;
+            }
+            const long step = std::stol(step_str);
+            if (step != cur_step)
+            {
+                pushGroup(cur_step);
+                tgt.fill(0.0f);
+                qcr.fill(0.0f);
+                filled = 0;
+                cur_step = step;
+            }
+            const auto ji = static_cast<size_t>(it->second);
+            tgt[ji] = std::stof(target_str);
+            qcr[ji] = std::stof(qcurr_str);
+            ++filled;
+        }
+        pushGroup(cur_step);
+    }
+    catch (const std::exception &e)
+    {
+        RCLCPP_ERROR(node_->get_logger(),
+                     "Replay CSV parse failed near step %ld: %s", cur_step, e.what());
+        replay_target_.clear();
+        replay_qcurr_.clear();
+        return false;
+    }
+
+    if (replay_target_.empty())
+    {
+        RCLCPP_ERROR(node_->get_logger(),
+                     "Replay CSV has no complete frames with step>=%ld: %s", kStartStep, path.c_str());
+        return false;
+    }
+    if (malformed > 0)
+    {
+        RCLCPP_WARN(node_->get_logger(), "Replay CSV skipped %ld malformed lines", malformed);
+    }
+    // 相位对齐：sim 相位钟从 step0 连续走（hold 不冻结），第 0 帧已带 0.3s 相位提前量
+    replay_phase_offset_ = kReplayStartStep * kReplaySimDt;
+    replay_loaded_ = true;
+    return true;
+}
+
 void Locomotion::initializeParameters()
 {
     dt_ = getOrDeclareParameter<double>(node_, "control_dt", 0.01);
@@ -405,9 +649,9 @@ void Locomotion::initializeParameters()
     frame_stack_ = getOrDeclareParameter<int>(node_, "frame_stack", 15);
     model_obs_dim_ = getOrDeclareParameter<int>(node_, "model_obs_dim", NUM_SINGLE_OBS * frame_stack_);
 
-    // 架空验证期临时×0.2（训练值 {0.15,0.25,0.25,0.25,0.1,0.1}×2，落地稳定后恢复）
+    // 训练值 {0.15,0.25,0.25,0.25,0.1,0.1}×2（ZRobotCfg.action_scale）；缩比验证用参数覆盖，勿改默认
     auto action_scale_param = getOrDeclareParameter<std::vector<double>>(
-        node_, "action_scale", std::vector<double>{0.075,0.125,0.125,0.125,0.05,0.05,0.075,0.125,0.125,0.125,0.05,0.05});
+        node_, "action_scale", std::vector<double>{0.15,0.25,0.25,0.25,0.1,0.1,0.15,0.25,0.25,0.25,0.1,0.1});
     if (action_scale_param.size() == NUM_ACTIONS)
     {
         for (int i = 0; i < NUM_ACTIONS; ++i)
@@ -429,13 +673,23 @@ void Locomotion::initializeParameters()
     obs_scale_dof_pos_ = static_cast<float>(getOrDeclareParameter<double>(node_, "obs_scale_dof_pos", 1.0));
     obs_scale_dof_vel_ = static_cast<float>(getOrDeclareParameter<double>(node_, "obs_scale_dof_vel", 0.05));
 
-    startup_hold_seconds_ = getOrDeclareParameter<double>(node_, "startup_hold_seconds", 3.0);
+    startup_hold_seconds_ = getOrDeclareParameter<double>(node_, "startup_hold_seconds", 0.0);
     require_imu_before_locomotion_ = getOrDeclareParameter<bool>(node_, "require_imu_before_locomotion", true);
     imu_timeout_ = getOrDeclareParameter<double>(node_, "imu_timeout", 0.5);
 
-    enable_action_safety_ = getOrDeclareParameter<bool>(node_, "enable_action_safety", true);
+    enable_action_safety_ = getOrDeclareParameter<bool>(node_, "enable_action_safety", false);
     action_filter_alpha_ = static_cast<float>(getOrDeclareParameter<double>(node_, "action_filter_alpha", 0.15));
-    action_fade_in_seconds_ = getOrDeclareParameter<double>(node_, "action_fade_in_seconds", 3.0);
+    action_fade_in_seconds_ = getOrDeclareParameter<double>(node_, "action_fade_in_seconds", 0.0);
+
+    // CSV 轨迹回放（诊断）：off / target_q / q_curr，路径为空或解析失败时回退策略控制
+    replay_mode_ = getOrDeclareParameter<std::string>(node_, "replay_mode", "off");
+    replay_csv_path_ = getOrDeclareParameter<std::string>(node_, "replay_csv_path", "");
+    // 回放→策略交接：motion_t（hold 后秒数）达到该值即停止注入回放帧（<0 关闭=播到末尾）
+    replay_handoff_seconds_ = getOrDeclareParameter<double>(node_, "replay_handoff_seconds", -1.0);
+
+    // 电压保护阈值（0 = 关闭）：先空载记录 vbus，再按压降设 warn/trip
+    vbus_warn_threshold_ = getOrDeclareParameter<double>(node_, "vbus_warn_threshold", 0.0);
+    vbus_trip_threshold_ = getOrDeclareParameter<double>(node_, "vbus_trip_threshold", 0.0);
 
     enable_logging_ = getOrDeclareParameter<bool>(node_, "enable_logging", true);
     log_decimation_ = getOrDeclareParameter<int>(node_, "log_decimation", 1);
@@ -622,6 +876,26 @@ void Locomotion::cmdCallback(const geometry_msgs::msg::Twist::SharedPtr msg)
     current_command_(2) = std::clamp(static_cast<float>(msg->angular.z), -1.0f, 1.0f);
 }
 
+void Locomotion::batteryCallback(const battery_control::msg::BatteryStatus::SharedPtr msg)
+{
+    // 双电池配置下只取主机（address=0 / role=master），避免两条消息交错覆盖
+    if (msg->address != 0 && msg->role != "master")
+    {
+        return;
+    }
+    RCLCPP_INFO_ONCE(node_->get_logger(), "Received battery status, VBUS telemetry enabled");
+    std::lock_guard<std::mutex> lock(battery_mutex_);
+    battery_received_ = true;
+    last_battery_time_ = std::chrono::steady_clock::now();
+    batt_online_ = msg->online;
+    if (msg->voltage > 0.5f)
+    {
+        batt_voltage_ = msg->voltage;
+    }
+    batt_current_ = msg->discharge_current;
+    batt_soc_ = msg->soc;
+}
+
 void Locomotion::collectObservations()
 {
     if (phase_period_ <= 1e-6)
@@ -640,15 +914,24 @@ void Locomotion::collectObservations()
     }
 
     // 相位用墙钟而非循环计数：推理偶发超时不会拖慢步态时钟，且首帧对齐训练的 (sin,cos)=(0,1)
+    // hold 期间相位冻结为 0（=训练初始观测），动作注入时才起步：否则 hold 阶段步态时钟
+    // 空转数圈，fade 开始时策略面对"静止机器人+跳变相位"的 15 帧分布外历史，输出激进动作
     const double t_elapsed = std::chrono::duration<double>(
         std::chrono::steady_clock::now() - init_time_).count();
-    const double phase = 2.0 * M_PI * t_elapsed / phase_period_;
+    const double t_phase = std::max(0.0, t_elapsed - startup_hold_seconds_);
+    // 回放模式相位钟前移到 CSV 第 0 帧的仿真相位（≈2.945rad），使 obs_0/1 与回放动作
+    // 同相：act_policy 可与仿真 action 逐帧对比，交接时策略观测历史也与腿态一致
+    const double phase_time = t_phase + replay_phase_offset_;
+    const double phase = 2.0 * M_PI * phase_time / phase_period_;
     obs_current_.setZero();
     obs_current_(0) = static_cast<float>(std::sin(phase));
     obs_current_(1) = static_cast<float>(std::cos(phase));
     obs_current_(2) = command(0) * obs_scale_lin_vel_;
     obs_current_(3) = command(1) * obs_scale_lin_vel_;
     obs_current_(4) = command(2) * obs_scale_ang_vel_;
+
+    // 策略关节空间测量（与 writeLogRow 的 q_curr 同口径），供超限保护比较
+    std::array<float, NUM_ACTIONS> q_meas{};
 
     for (int i = 0; i < NUM_ACTIONS; ++i)
     {
@@ -673,6 +956,7 @@ void Locomotion::collectObservations()
         }
         const float sign = joint_signs_[i];
         const float q_rel = q * sign - default_pose_(i);
+        q_meas[i] = q * sign;
 
         obs_current_(5 + i) = q_rel * obs_scale_dof_pos_;
         obs_current_(17 + i) = dq * sign * obs_scale_dof_vel_;
@@ -701,6 +985,8 @@ void Locomotion::collectObservations()
         // 与主循环一致: obs = 测量×sign - default（只翻转测量，不翻转 default）
         obs_current_(5 + 4)  = (prev_L_pitch_ * s4 - default_pose_(4)) * obs_scale_dof_pos_;
         obs_current_(5 + 5)  = (prev_L_roll_  * s5 - default_pose_(5)) * obs_scale_dof_pos_;
+        q_meas[IDX_L_FOOT_PITCH] = prev_L_pitch_ * s4;
+        q_meas[IDX_L_FOOT_ROLL]  = prev_L_roll_  * s5;
         // 速度: 经雅可比将电机速度转为机构关节速度（与位置 FK 对齐）
         double L_pitch_vel = 0.0, L_roll_vel = 0.0;
         if (!ankle_ik_.motorVelToJointVel(static_cast<double>(prev_L_pitch_),
@@ -739,6 +1025,8 @@ void Locomotion::collectObservations()
         // obs 按 URDF 约定: obs = 测量×sign - default
         obs_current_(5 + 10)  = (prev_R_pitch_ * s10 - default_pose_(10)) * obs_scale_dof_pos_;
         obs_current_(5 + 11)  = (prev_R_roll_  * s11 - default_pose_(11)) * obs_scale_dof_pos_;
+        q_meas[IDX_R_FOOT_PITCH] = prev_R_pitch_ * s10;
+        q_meas[IDX_R_FOOT_ROLL]  = prev_R_roll_  * s11;
         // 速度: 经雅可比将电机速度转为机构关节速度（与位置 FK 对齐）
         double R_pitch_vel = 0.0, R_roll_vel = 0.0;
         if (!ankle_ik_.motorVelToJointVel(static_cast<double>(prev_R_pitch_),
@@ -759,6 +1047,11 @@ void Locomotion::collectObservations()
 
     obs_current_.segment(41, 3) = omega;
     obs_current_.segment(44, 3) = euler;
+
+    {
+        std::lock_guard<std::mutex> lock(action_mutex_);
+        joint_meas_ = q_meas;
+    }
 
     for (int i = 0; i < NUM_SINGLE_OBS; ++i)
     {
@@ -845,6 +1138,42 @@ void Locomotion::runInference()
             std::clamp((t_now - startup_hold_seconds_) / action_fade_in_seconds_, 0.0, 1.0));
     }
 
+    // 回放帧：hold 结束时刻 = 第 0 帧（csv 为绝对角，已含 default）；播完保持最后一帧；
+    // replay_handoff_seconds_ >= 0 时 motion_t 到点即停止注入，策略从回放动作历史无缝接管
+    const float* replay_frame = nullptr;
+    bool handoff_now = false;
+    if (replay_loaded_)
+    {
+        const double t_now = std::chrono::duration<double>(
+            std::chrono::steady_clock::now() - init_time_).count();
+        const double motion_t = t_now - startup_hold_seconds_;
+        const bool past_handoff =
+            replay_handoff_seconds_ >= 0.0 && motion_t >= replay_handoff_seconds_;
+        if (past_handoff)
+        {
+            if (!replay_handed_off_)
+            {
+                replay_handed_off_ = true;
+                handoff_now = true;
+            }
+        }
+        else
+        {
+            const size_t n = replay_target_.size();
+            const auto frame = static_cast<size_t>(std::max(0.0, motion_t) / dt_);
+            if (frame >= n)
+            {
+                RCLCPP_WARN_THROTTLE(node_->get_logger(), *node_->get_clock(), 5000,
+                                     "Replay CSV finished (%zu frames, %.1fs), holding last frame",
+                                     n, n * dt_);
+            }
+            const size_t idx = std::min(frame, n - 1);
+            replay_frame = (replay_mode_ == "q_curr")
+                               ? replay_qcurr_[idx].data()
+                               : replay_target_[idx].data();
+        }
+    }
+
     Eigen::VectorXf policy_action = Eigen::VectorXf::Zero(NUM_ACTIONS);
     Eigen::VectorXf raw_action = Eigen::VectorXf::Zero(NUM_ACTIONS);
     Eigen::VectorXf scaled_action = Eigen::VectorXf::Zero(NUM_ACTIONS);
@@ -852,14 +1181,47 @@ void Locomotion::runInference()
     {
         float clipped = std::clamp(output_data[static_cast<size_t>(i)], -act_clip_, act_clip_);
         policy_action(i) = clipped;
-        if (enable_action_safety_)
+        if (replay_frame != nullptr)
         {
-            // 一阶低通：训练 zrobot_env.step 的随机 delay 滤波同族（alpha∈[0,0.5]，此处取安全侧固定值）
-            clipped = (1.0f - action_filter_alpha_) * clipped + action_filter_alpha_ * act_prev_(i);
+            // csv 绝对角还原为动作（策略单位），管线 default+act 加回 → 净效果=直接命令 csv 角度；
+            // 回放绕过 LPF/fade，忠实复现仿真指令
+            const float scale = action_scale_[i];
+            clipped = scale != 0.0f
+                          ? std::clamp((replay_frame[i] - default_pose_(i)) / scale,
+                                       -act_clip_, act_clip_)
+                          : 0.0f;
+            raw_action(i) = clipped;
         }
-        // 渐入后的值同时进 obs 动作历史，保持训练 self.actions "所见即所施加" 的语义
-        raw_action(i) = fade * clipped;
+        else
+        {
+            if (enable_action_safety_)
+            {
+                // 一阶低通：训练 zrobot_env.step 的随机 delay 滤波同族（alpha∈[0,0.5]，此处取安全侧固定值）
+                clipped = (1.0f - action_filter_alpha_) * clipped + action_filter_alpha_ * act_prev_(i);
+            }
+            // 渐入后的值同时进 obs 动作历史，保持训练 self.actions "所见即所施加" 的语义
+            raw_action(i) = fade * clipped;
+        }
         scaled_action(i) = raw_action(i) * action_scale_[i];
+    }
+
+    if (handoff_now)
+    {
+        // 交接诊断：act_prev_ 仍为上一拍回放动作，首拍差反映策略对当前观测的认同度
+        float d_max = 0.0f;
+        int j_max = 0;
+        for (int i = 0; i < NUM_ACTIONS; ++i)
+        {
+            const float d = std::abs(raw_action(i) - act_prev_(i));
+            if (d > d_max)
+            {
+                d_max = d;
+                j_max = i;
+            }
+        }
+        RCLCPP_INFO(node_->get_logger(),
+                    "Replay->policy handoff: max|policy - last replay act|=%.3f (joint %d)",
+                    d_max, j_max);
     }
 
     {
@@ -929,6 +1291,10 @@ void Locomotion::writeLogRow(const Eigen::VectorXf& policy_action, const Eigen::
     for (int i = 0; i < NUM_ACTIONS; ++i) log_file_ << ',' << target_q(i);
     for (int i = 0; i < NUM_ACTIONS; ++i) log_file_ << ',' << q_curr(i);
     for (int i = 0; i < NUM_ACTIONS; ++i) log_file_ << ',' << tau_fb(i);
+    {
+        std::lock_guard<std::mutex> lock(battery_mutex_);
+        log_file_ << ',' << batt_voltage_ << ',' << batt_soc_ << ',' << batt_current_;
+    }
     log_file_ << '\n';
 }
 

@@ -15,8 +15,8 @@
 class ParallelAnkle {
 public:
     // 踝关节机械限位 (rad)
-    static constexpr double PITCH_MIN = -0.4;
-    static constexpr double PITCH_MAX =  0.4;
+    static constexpr double PITCH_MIN = -0.34;
+    static constexpr double PITCH_MAX =  0.34;
     static constexpr double ROLL_MIN  = -0.1;
     static constexpr double ROLL_MAX  =  0.1;
 
@@ -48,7 +48,7 @@ public:
         ra02_    = {0.04876, 0.0, 0.24138};
 
         rb01_    = {0.04876, 0.02498, 0.15935};
-        rb02_    = {0.04876, -0.0246, 0.2458};
+        rb02_    = {0.04876, -0.02349, 0.24994};
         lbar1_   = norm(sub(rb01_, ra01_));
         lbar2_   = norm(sub(rb02_, ra02_));
 

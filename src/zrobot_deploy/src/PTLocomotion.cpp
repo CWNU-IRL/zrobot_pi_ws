@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <csignal>
 #include <functional>
 #include <stdexcept>
 #include <tf2/LinearMath/Matrix3x3.h>
@@ -122,6 +123,59 @@ void PTLocomotion::run()
             2000,
             "PTLocomotion inference thread not running");
         return;
+    }
+
+    // 关节超限保护：任一关节测量值超限（踝为 FK 关节角，与 Locomotion 日志 q_curr 同口径），
+    // 按配置立即失能或切 Damping
+    if (joint_limit_enable_)
+    {
+        std::array<float, NUM_ACTIONS> q_meas{};
+        {
+            std::lock_guard<std::mutex> lock(action_mutex_);
+            q_meas = joint_meas_;
+        }
+        int joint_idx = -1;
+        float q_val = 0.0f;
+        if (jointLimitViolated(q_meas, joint_idx, q_val))
+        {
+            RCLCPP_ERROR(node_->get_logger(),
+                         "Joint %d (motor %d) position %.3f rad outside limits [%.3f, %.3f], triggering action %d",
+                         joint_idx, dof_indices_[static_cast<size_t>(joint_idx)], q_val,
+                         joint_limit_lower_[static_cast<size_t>(joint_idx)],
+                         joint_limit_upper_[static_cast<size_t>(joint_idx)],
+                         joint_limit_action_);
+            if (joint_limit_action_ == 1)
+            {
+                // 失能失败（服务不可达等）时回退 Damping，避免电机保持大力矩失控
+                if (!disableAllMotors())
+                {
+                    RCLCPP_ERROR(node_->get_logger(),
+                                 "Disable failed, falling back to Damping");
+                    requestSwitch(FSMState::DAMPING);
+                }
+                else
+                {
+                    // 电机已失能：先命令电池强制关机切断输出，再结束进程；
+                    // 关机失败不回退（电机已失能），仅记录并继续终止
+                    if (!forceBatteryShutdown())
+                    {
+                        RCLCPP_ERROR(node_->get_logger(),
+                                     "Battery force shutdown failed, terminating anyway");
+                    }
+                    // 失能+关机完成后：发 SIGINT 结束进程，等效终端 Ctrl+C
+                    // （rclcpp 触发 shutdown，主循环经 spin_some 异常路径干净退出）
+                    RCLCPP_FATAL(node_->get_logger(),
+                                 "Motors disabled after joint limit, terminating process");
+                    std::raise(SIGINT);
+                }
+            }
+            else
+            {
+                requestSwitch(FSMState::DAMPING);
+            }
+            exit();
+            return;
+        }
     }
 
     const auto elapsed = std::chrono::duration<double>(Clock::now() - init_time_).count();
@@ -512,6 +566,9 @@ void PTLocomotion::collectObservations()
     obs_current_(3) = command(1) * obs_scale_lin_vel_;
     obs_current_(4) = command(2) * obs_scale_ang_vel_;
 
+    // 策略关节空间测量（与 Locomotion 日志 q_curr 同口径），供超限保护比较
+    std::array<float, NUM_ACTIONS> q_meas{};
+
     for (int i = 0; i < NUM_ACTIONS; ++i)
     {
         // 踝关节由下文 FK 统一处理，此处跳过
@@ -535,6 +592,7 @@ void PTLocomotion::collectObservations()
         }
         const float sign = joint_signs_[i];
         const float q_rel = q * sign - default_pose_(i);
+        q_meas[i] = q * sign;
 
         obs_current_(5 + i) = q_rel * obs_scale_dof_pos_;
         obs_current_(17 + i) = dq * sign * obs_scale_dof_vel_;
@@ -563,6 +621,8 @@ void PTLocomotion::collectObservations()
         // 与主循环一致: obs = 测量×sign - default（只翻转测量，不翻转 default）
         obs_current_(5 + 4)  = (prev_L_pitch_ * s4 - default_pose_(4)) * obs_scale_dof_pos_;
         obs_current_(5 + 5)  = (prev_L_roll_  * s5 - default_pose_(5)) * obs_scale_dof_pos_;
+        q_meas[IDX_L_FOOT_PITCH] = prev_L_pitch_ * s4;
+        q_meas[IDX_L_FOOT_ROLL]  = prev_L_roll_  * s5;
         // 速度: 经雅可比将电机速度转为机构关节速度（与位置 FK 对齐）
         double L_pitch_vel = 0.0, L_roll_vel = 0.0;
         if (!ankle_ik_.motorVelToJointVel(static_cast<double>(prev_L_pitch_),
@@ -601,6 +661,8 @@ void PTLocomotion::collectObservations()
         // obs 按 URDF 约定: obs = 测量×sign - default
         obs_current_(5 + 10)  = (prev_R_pitch_ * s10 - default_pose_(10)) * obs_scale_dof_pos_;
         obs_current_(5 + 11)  = (prev_R_roll_  * s11 - default_pose_(11)) * obs_scale_dof_pos_;
+        q_meas[IDX_R_FOOT_PITCH] = prev_R_pitch_ * s10;
+        q_meas[IDX_R_FOOT_ROLL]  = prev_R_roll_  * s11;
         // 速度: 经雅可比将电机速度转为机构关节速度（与位置 FK 对齐）
         double R_pitch_vel = 0.0, R_roll_vel = 0.0;
         if (!ankle_ik_.motorVelToJointVel(static_cast<double>(prev_R_pitch_),
@@ -621,6 +683,11 @@ void PTLocomotion::collectObservations()
 
     obs_current_.segment(41, 3) = omega;
     obs_current_.segment(44, 3) = euler;
+
+    {
+        std::lock_guard<std::mutex> lock(action_mutex_);
+        joint_meas_ = q_meas;
+    }
 
     for (int i = 0; i < NUM_SINGLE_OBS; ++i)
     {

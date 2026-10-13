@@ -40,6 +40,9 @@ private:
     Eigen::VectorXf act_prev_;
     Eigen::VectorXf act_scaled_;
     Eigen::VectorXf act_temp_;
+    // 策略关节空间测量快照（非踝=反馈×sign，踝=FK 关节角×sign，与 Locomotion 日志同口径；
+    // 推理线程写、run() 读，action_mutex_ 保护）
+    std::array<float, NUM_ACTIONS> joint_meas_{};
     Eigen::VectorXf default_pose_;
     std::array<int, NUM_ACTIONS> dof_indices_;
     std::array<float, NUM_ACTIONS> joint_signs_; // 每个关节动作的符号翻转 (±1.0)

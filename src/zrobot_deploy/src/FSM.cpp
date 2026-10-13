@@ -1,4 +1,5 @@
 #include "zrobot_deploy/FSM.h"
+#include <algorithm>
 
 // 跨 FSM 实例共享的电机反馈缓存定义
 std::array<float, 23> FSM::feedback_positions_{};
@@ -23,7 +24,61 @@ FSM::FSM(std::shared_ptr<rclcpp::Node> node)
     // 创建服务客户端
     control_client_ = node_->create_client<rs_interface::srv::RobStrideMsgs>("/rob_stride_control");
     get_positions_client_ = node_->create_client<rs_interface::srv::GetPositions>("/get_positions");
-    
+    disable_motors_client_ = node_->create_client<rs_interface::srv::DisableMotors>("/disable_motors");
+    battery_shutdown_client_ =
+        node_->create_client<battery_control::srv::ForceShutdown>("/battery/force_shutdown");
+
+    // 关节超限保护参数（节点跨 FSM 实例复用，需按已存在则读取的方式声明）
+    auto get_or_declare = [this](const std::string& name, auto default_value) {
+        if (node_->has_parameter(name))
+        {
+            return node_->get_parameter(name).get_value<decltype(default_value)>();
+        }
+        return node_->declare_parameter<decltype(default_value)>(name, default_value);
+    };
+    joint_limit_enable_ = get_or_declare("joint_limit.enable", true);
+    joint_limit_action_ = get_or_declare("joint_limit.action", 1); // 0=DAMPING, 1=DISABLE电机
+
+    // 每关节上下限默认值（策略关节空间，URDF 限位原值，顺序与 default_pose 一致：
+    // L/R: hip_roll, hip_yaw, hip_pitch, knee, foot_pitch, foot_roll）
+    const std::vector<double> default_lower{-0.3, -1.0, -0.8, -1.9, -0.4, -0.2,
+                                            -1.5,  -1.0, -0.8,  0.0, -0.4, -0.2};
+    const std::vector<double> default_upper{ 1.5,   1.0,  0.8,  0.0,  0.4,  0.2,
+                                             0.3,  1.0,  0.8,  1.9,  0.4,  0.2};
+    auto lower_param = get_or_declare("joint_limit.lower", default_lower);
+    auto upper_param = get_or_declare("joint_limit.upper", default_upper);
+    if (lower_param.size() == joint_limit_lower_.size()
+        && upper_param.size() == joint_limit_upper_.size())
+    {
+        std::copy(lower_param.begin(), lower_param.end(), joint_limit_lower_.begin());
+        std::copy(upper_param.begin(), upper_param.end(), joint_limit_upper_.begin());
+    }
+    else
+    {
+        RCLCPP_WARN(node_->get_logger(),
+                    "joint_limit.lower/upper size=%zu/%zu, expected 12/12, using URDF defaults",
+                    lower_param.size(), upper_param.size());
+        std::copy(default_lower.begin(), default_lower.end(), joint_limit_lower_.begin());
+        std::copy(default_upper.begin(), default_upper.end(), joint_limit_upper_.begin());
+    }
+
+    RCLCPP_INFO(node_->get_logger(),
+                "Joint limit protection: enable=%s, action=%d (%s)",
+                joint_limit_enable_ ? "true" : "false", joint_limit_action_,
+                joint_limit_action_ == 1 ? "disable motors" : "switch to Damping");
+    RCLCPP_INFO(node_->get_logger(),
+                "Joint limits (joint 0-11) lower: [%.2f %.2f %.2f %.2f %.2f %.2f %.2f %.2f %.2f %.2f %.2f %.2f]",
+                joint_limit_lower_[0], joint_limit_lower_[1], joint_limit_lower_[2],
+                joint_limit_lower_[3], joint_limit_lower_[4], joint_limit_lower_[5],
+                joint_limit_lower_[6], joint_limit_lower_[7], joint_limit_lower_[8],
+                joint_limit_lower_[9], joint_limit_lower_[10], joint_limit_lower_[11]);
+    RCLCPP_INFO(node_->get_logger(),
+                "Joint limits (joint 0-11) upper: [%.2f %.2f %.2f %.2f %.2f %.2f %.2f %.2f %.2f %.2f %.2f %.2f]",
+                joint_limit_upper_[0], joint_limit_upper_[1], joint_limit_upper_[2],
+                joint_limit_upper_[3], joint_limit_upper_[4], joint_limit_upper_[5],
+                joint_limit_upper_[6], joint_limit_upper_[7], joint_limit_upper_[8],
+                joint_limit_upper_[9], joint_limit_upper_[10], joint_limit_upper_[11]);
+
     RCLCPP_INFO(node_->get_logger(), "FSM initialized");
 }
 
@@ -224,4 +279,78 @@ bool FSM::getCurrentPositions(std::array<float, 23>& positions)
         RCLCPP_ERROR(node_->get_logger(), "Failed to call get_positions service (timeout)");
         return false;
     }
+}
+
+bool FSM::jointLimitViolated(const std::array<float, 12>& joints, int& joint_idx, float& value)
+{
+    // 策略关节空间逐关节上下限（joints 由调用方按日志 q_curr 同口径构建）
+    for (int i = 0; i < static_cast<int>(joint_limit_lower_.size()); ++i)
+    {
+        const float q = joints[static_cast<size_t>(i)];
+        if (q < joint_limit_lower_[i] || q > joint_limit_upper_[i])
+        {
+            joint_idx = i;
+            value = q;
+            return true;
+        }
+    }
+    return false;
+}
+
+bool FSM::disableAllMotors()
+{
+    if (!disable_motors_client_->wait_for_service(std::chrono::seconds(1)))
+    {
+        RCLCPP_ERROR(node_->get_logger(), "disable_motors service not available");
+        return false;
+    }
+
+    auto request = std::make_shared<rs_interface::srv::DisableMotors::Request>();
+    auto future = disable_motors_client_->async_send_request(request);
+    if (rclcpp::spin_until_future_complete(node_, future, std::chrono::milliseconds(500))
+        == rclcpp::FutureReturnCode::SUCCESS)
+    {
+        auto response = future.get();
+        if (response->success)
+        {
+            RCLCPP_WARN(node_->get_logger(), "All motors disabled: %s", response->message.c_str());
+            return true;
+        }
+        RCLCPP_ERROR(node_->get_logger(), "Disable motors failed: %s", response->message.c_str());
+        return false;
+    }
+    RCLCPP_ERROR(node_->get_logger(), "Failed to call /disable_motors service (timeout)");
+    return false;
+}
+
+bool FSM::forceBatteryShutdown()
+{
+    // 电池节点可能未启动：等待时间取安全侧短值，失败由调用方决定后续动作
+    if (!battery_shutdown_client_->wait_for_service(std::chrono::milliseconds(500)))
+    {
+        RCLCPP_ERROR(node_->get_logger(), "/battery/force_shutdown service not available");
+        return false;
+    }
+
+    auto request = std::make_shared<battery_control::srv::ForceShutdown::Request>();
+    request->confirm = true;  // 服务端要求显式确认才执行
+    auto future = battery_shutdown_client_->async_send_request(request);
+    // 服务端需持续下发 0x04EF 约 1s，超时给 3s 余量
+    if (rclcpp::spin_until_future_complete(node_, future, std::chrono::seconds(3))
+        == rclcpp::FutureReturnCode::SUCCESS)
+    {
+        auto response = future.get();
+        if (response->success)
+        {
+            RCLCPP_WARN(node_->get_logger(),
+                        "Battery force shutdown sent (%d frames): %s",
+                        static_cast<int>(response->frames_sent), response->message.c_str());
+            return true;
+        }
+        RCLCPP_ERROR(node_->get_logger(),
+                     "Battery force shutdown rejected: %s", response->message.c_str());
+        return false;
+    }
+    RCLCPP_ERROR(node_->get_logger(), "Failed to call /battery/force_shutdown service (timeout)");
+    return false;
 }

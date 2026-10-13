@@ -4,6 +4,8 @@
 #include "zrobot_deploy/PTLocomotion.h"
 #include "zrobot_deploy/Damping.h"
 #include <rclcpp/rclcpp.hpp>
+#include <battery_control/srv/force_shutdown.hpp>
+#include <chrono>
 #include <memory>
 #include <termios.h>
 #include <unistd.h>
@@ -65,6 +67,7 @@ void printMenu()
     std::cout << "  [T] - 启动 PTLocomotion 状态机 (.pt 推理)\n";
     std::cout << "  [D] - 启动 Damping 状态机 (仿真阻尼模式)\n";
     std::cout << "  [S] - 停止当前状态机\n";
+    std::cout << "  [P] - 电池强制关机 (3秒内再按一次P确认执行)\n";
     std::cout << "  [Q] - 退出程序\n";
     std::cout << "========================================\n\n";
 }
@@ -89,6 +92,42 @@ int main(int argc, char** argv)
     printMenu();
     
     bool running = true;
+
+    // 电池强制关机（P 键触发，3 秒内双击 P 确认，避免误触瞬间断电）
+    auto battery_shutdown_client =
+        node->create_client<battery_control::srv::ForceShutdown>("/battery/force_shutdown");
+    bool battery_armed = false;
+    auto battery_armed_time = std::chrono::steady_clock::now();
+    auto force_battery_shutdown = [&]() {
+        if (!battery_shutdown_client->wait_for_service(std::chrono::milliseconds(500)))
+        {
+            RCLCPP_ERROR(node->get_logger(),
+                         "/battery/force_shutdown 服务不可用（battery_control 节点未启动？），未执行");
+            return;
+        }
+        auto request = std::make_shared<battery_control::srv::ForceShutdown::Request>();
+        request->confirm = true;  // 服务端要求显式确认才执行
+        auto future = battery_shutdown_client->async_send_request(request);
+        if (rclcpp::spin_until_future_complete(node, future, std::chrono::seconds(3))
+            == rclcpp::FutureReturnCode::SUCCESS)
+        {
+            auto response = future.get();
+            if (response->success)
+            {
+                RCLCPP_WARN(node->get_logger(), "电池强制关机指令已下发: %s",
+                            response->message.c_str());
+            }
+            else
+            {
+                RCLCPP_ERROR(node->get_logger(), "电池强制关机被拒绝: %s",
+                             response->message.c_str());
+            }
+        }
+        else
+        {
+            RCLCPP_ERROR(node->get_logger(), "/battery/force_shutdown 调用超时，未执行");
+        }
+    };
     
     while (rclcpp::ok() && running) {
         // 检查键盘输入
@@ -189,7 +228,37 @@ int main(int argc, char** argv)
                     }
                     break;
                 }
-                
+
+                case 'p':
+                case 'P':
+                {
+                    const auto now = std::chrono::steady_clock::now();
+                    if (battery_armed
+                        && std::chrono::duration<double>(now - battery_armed_time).count() <= 3.0)
+                    {
+                        battery_armed = false;
+                        std::cout << "\n>>> 已确认，正在下发电池强制关机指令… <<<\n";
+                        force_battery_shutdown();
+                        // 关机指令已下发：停止当前状态机（join 推理线程、落盘日志）并立即退出进程
+                        if (current_fsm)
+                        {
+                            RCLCPP_INFO(node->get_logger(), "Stopping current FSM before exit...");
+                            current_fsm->exit();
+                            current_fsm.reset();
+                        }
+                        running = false;
+                        std::cout << "\n>>> 电池强制关机指令已下发，程序退出 <<<\n\n";
+                    }
+                    else
+                    {
+                        battery_armed = true;
+                        battery_armed_time = now;
+                        std::cout << "\n>>> 警告：强制关机会立即切断电池输出！"
+                                     "3 秒内再按一次 P 确认执行，超时或按其他键取消 <<<\n";
+                    }
+                    break;
+                }
+
                 case 's':
                 case 'S':
                 {

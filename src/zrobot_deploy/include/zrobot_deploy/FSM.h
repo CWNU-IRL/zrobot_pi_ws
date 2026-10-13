@@ -4,6 +4,8 @@
 #include <rclcpp/rclcpp.hpp>
 #include <rs_interface/srv/rob_stride_msgs.hpp>
 #include <rs_interface/srv/get_positions.hpp>
+#include <rs_interface/srv/disable_motors.hpp>
+#include <battery_control/srv/force_shutdown.hpp>
 #include <memory>
 #include <mutex>
 #include <atomic>
@@ -51,6 +53,17 @@ protected:
     
     // 获取当前电机位置
     bool getCurrentPositions(std::array<float, 23>& positions);
+
+    // 关节超限检查：策略关节空间测量值（非踝 = 电机反馈×sign，踝 = FK 关节角×sign，
+    // 与日志 q_curr 同口径）任一关节超出上下限时返回 true，
+    // 并通过参数返回首个超限关节索引（0-11 策略序）与其值
+    bool jointLimitViolated(const std::array<float, 12>& joints, int& joint_idx, float& value);
+
+    // 失能全部电机（调用桥接层 /disable_motors 服务）
+    bool disableAllMotors();
+
+    // 电池强制关机（调用 /battery/force_shutdown 服务，切断电池输出）
+    bool forceBatteryShutdown();
     
     // ROS2节点
     std::shared_ptr<rclcpp::Node> node_;
@@ -58,6 +71,16 @@ protected:
     // 服务客户端
     rclcpp::Client<rs_interface::srv::RobStrideMsgs>::SharedPtr control_client_;
     rclcpp::Client<rs_interface::srv::GetPositions>::SharedPtr get_positions_client_;
+    rclcpp::Client<rs_interface::srv::DisableMotors>::SharedPtr disable_motors_client_;
+    rclcpp::Client<battery_control::srv::ForceShutdown>::SharedPtr battery_shutdown_client_;
+
+    // 关节超限保护参数（0 = DAMPING, 1 = 失能）
+    bool joint_limit_enable_;
+    int joint_limit_action_;
+    // 每关节上下限（策略关节空间，索引 0-11 顺序与 default_pose 一致：
+    // L/R hip_roll, hip_yaw, hip_pitch, knee, foot_pitch, foot_roll；踝为 FK 关节角，URDF 限位可直接使用）
+    std::array<double, 12> joint_limit_lower_;
+    std::array<double, 12> joint_limit_upper_;
     
     // 当前状态
     FSMState current_state_;

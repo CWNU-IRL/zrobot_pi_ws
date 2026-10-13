@@ -147,6 +147,13 @@ MotorControllerNode::MotorControllerNode()
 
     RCLCPP_INFO(logger_, "零点设置服务已创建: /motor_controller_node/set_zeros");
 
+    disable_motors_service_ = this->create_service<rs_interface::srv::DisableMotors>(
+        "disable_motors",
+        std::bind(&MotorControllerNode::handle_disable_motors_service, this,
+                  std::placeholders::_1, std::placeholders::_2));
+
+    RCLCPP_INFO(logger_, "电机失能服务已创建: /motor_controller_node/disable_motors");
+
     get_positions_service_ = this->create_service<rs_interface::srv::GetPositions>(
         "get_positions",
         std::bind(&MotorControllerNode::handle_get_positions_service, this,
@@ -464,11 +471,51 @@ void MotorControllerNode::handle_set_zeros_service(
  *
  * @see RobStrideMotor::read_initial_position() - 读取电机位置的底层方法
  */
+/**
+ * @brief 电机失能服务回调（安全保护触发）
+ *
+ * 对全部已初始化电机调用 Disenable_Motor(0)，立即切断输出。
+ * 注意：失能后需重启桥接节点（重新 enable）才能恢复控制。
+ */
+void MotorControllerNode::handle_disable_motors_service(
+    const std::shared_ptr<rs_interface::srv::DisableMotors::Request>,
+    std::shared_ptr<rs_interface::srv::DisableMotors::Response> response)
+{
+    std::lock_guard<std::mutex> lock(motors_mutex_);
+
+    RCLCPP_WARN(logger_, "接收到电机失能请求，正在失能全部电机");
+
+    bool has_error = false;
+    int disabled_count = 0;
+
+    for (int i = 0; i < NUM_MOTORS; ++i)
+    {
+        if (!motors_[i])
+        {
+            continue;
+        }
+        try
+        {
+            motors_[i]->Disenable_Motor(0);
+            ++disabled_count;
+        }
+        catch (const std::exception &e)
+        {
+            RCLCPP_ERROR(logger_, "失能电机%d失败: %s", i, e.what());
+            has_error = true;
+        }
+    }
+
+    response->success = !has_error;
+    response->message = has_error
+        ? "部分电机失能失败，详见日志"
+        : "已失能 " + std::to_string(disabled_count) + " 个电机";
+}
+
 void MotorControllerNode::handle_get_positions_service(
     const std::shared_ptr<rs_interface::srv::GetPositions::Request>,
     std::shared_ptr<rs_interface::srv::GetPositions::Response> response)
-{
-    std::lock_guard<std::mutex> lock(motors_mutex_);
+{    std::lock_guard<std::mutex> lock(motors_mutex_);
 
     RCLCPP_DEBUG(logger_, "接收到获取电机位置服务请求");
 

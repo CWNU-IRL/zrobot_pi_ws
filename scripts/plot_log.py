@@ -192,8 +192,31 @@ def plot_locomotion(t, cols, rows, save_dir, stem):
         ax.grid(alpha=0.3)
     fig4.tight_layout(rect=[0, 0, 1, 0.96])
 
+    # 5. 电池遥测（新版日志才有 vbus 列）
+    figs = [(fig, 'tracking'), (fig2, 'obs'), (fig3, 'action'), (fig4, 'tau')]
+    if 'vbus' in cols:
+        fig5 = plt.figure(figsize=(16, 6))
+        ax = fig5.add_subplot(2, 1, 1)
+        ax.plot(t, col('vbus'), color='tab:green', lw=1)
+        ax.set_ylabel('VBUS [V]')
+        ax.set_title('battery voltage'); ax.grid(alpha=0.3)
+        ax = fig5.add_subplot(2, 1, 2)
+        tau_abs_max = np.max(np.abs(np.column_stack(
+            [col(f'tau_motor_{i}') for i in range(len(JOINTS))])), axis=1)
+        ax.plot(t, col('batt_current'), color='tab:orange', lw=1, label='batt_current')
+        ax.set_ylabel('current [A]', color='tab:orange')
+        ax.grid(alpha=0.3)
+        ax2 = ax.twinx()
+        ax2.plot(t, tau_abs_max, color='tab:red', lw=0.8, alpha=0.8, label='max|tau|')
+        ax2.set_ylabel('max |tau| [N.m]', color='tab:red')
+        ax.set_xlabel('t [s]')
+        ax.set_title('battery current vs max torque (SOC legend in title)')
+        fig5.suptitle(f'{stem}: battery  SOC_last={col("soc")[-1]:.0f}%')
+        fig5.tight_layout(rect=[0, 0, 1, 0.95])
+        figs.append((fig5, 'battery'))
+
     if save_dir:
-        for fig_i, name in ((fig, 'tracking'), (fig2, 'obs'), (fig3, 'action'), (fig4, 'tau')):
+        for fig_i, name in figs:
             fig_i.savefig(os.path.join(save_dir, f'{stem}_{name}.png'), dpi=120)
         plt.close('all')
     else:
