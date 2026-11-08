@@ -46,9 +46,9 @@ Locomotion::Locomotion(std::shared_ptr<rclcpp::Node> node)
     imu_received_(false),
     motor_feedback_ready_(false),
     require_imu_before_locomotion_(true),
-    enable_action_safety_(false),
-    startup_hold_seconds_(0.0),
-    action_filter_alpha_(0.15f),
+    enable_action_safety_(true),
+    startup_hold_seconds_(0.2),
+    action_filter_alpha_(0.4f),
     action_fade_in_seconds_(0.0),
     vbus_warn_threshold_(0.0),
     vbus_trip_threshold_(0.0),
@@ -116,7 +116,7 @@ void Locomotion::initialize()
 
     // 加载 ONNX 模型
     const auto model_path = getOrDeclareParameter<std::string>(
-        node_, "onnx_model_path", std::string(POLICY_DIR) + "/policy.onnx");
+        node_, "onnx_model_path", std::string(POLICY_DIR) + "/policy_z3_5000.onnx");
     loadPolicy(model_path);
 
     // 回放模式：加载 sim2sim 轨迹 CSV；失败则显式回退策略控制（不静默）
@@ -673,12 +673,12 @@ void Locomotion::initializeParameters()
     obs_scale_dof_pos_ = static_cast<float>(getOrDeclareParameter<double>(node_, "obs_scale_dof_pos", 1.0));
     obs_scale_dof_vel_ = static_cast<float>(getOrDeclareParameter<double>(node_, "obs_scale_dof_vel", 0.05));
 
-    startup_hold_seconds_ = getOrDeclareParameter<double>(node_, "startup_hold_seconds", 0.0);
+    startup_hold_seconds_ = getOrDeclareParameter<double>(node_, "startup_hold_seconds", 0.2);
     require_imu_before_locomotion_ = getOrDeclareParameter<bool>(node_, "require_imu_before_locomotion", true);
     imu_timeout_ = getOrDeclareParameter<double>(node_, "imu_timeout", 0.5);
 
-    enable_action_safety_ = getOrDeclareParameter<bool>(node_, "enable_action_safety", false);
-    action_filter_alpha_ = static_cast<float>(getOrDeclareParameter<double>(node_, "action_filter_alpha", 0.15));
+    enable_action_safety_ = getOrDeclareParameter<bool>(node_, "enable_action_safety", true);
+    action_filter_alpha_ = static_cast<float>(getOrDeclareParameter<double>(node_, "action_filter_alpha", 0.4));
     action_fade_in_seconds_ = getOrDeclareParameter<double>(node_, "action_fade_in_seconds", 0.0);
 
     // CSV 轨迹回放（诊断）：off / target_q / q_curr，路径为空或解析失败时回退策略控制
