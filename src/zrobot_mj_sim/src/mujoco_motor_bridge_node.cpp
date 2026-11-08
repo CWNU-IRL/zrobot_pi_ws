@@ -687,7 +687,7 @@ rclcpp::Time MujocoMotorBridgeNode::current_sim_time_locked() const
 {
     if (!data_)
     {
-        return this->get_clock()->now();
+        return this->now();
     }
 
     const int64_t nanos = static_cast<int64_t>(data_->time * 1e9);

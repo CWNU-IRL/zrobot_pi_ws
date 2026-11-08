@@ -2,6 +2,7 @@
 #define ZROBOT_DEPLOY_PT_LOCOMOTION_H
 
 #include "zrobot_deploy/FSM.h"
+#include "zrobot_deploy/paralleljoint_z1.h"
 #include <Eigen/Dense>
 #include <array>
 #include <atomic>
@@ -25,6 +26,7 @@ public:
     void initialize() override;
     void run() override;
     void exit() override;
+    bool isReady() const override { return model_ready_; }
 
 private:
     static constexpr int NUM_SINGLE_OBS = 47;
@@ -38,8 +40,12 @@ private:
     Eigen::VectorXf act_prev_;
     Eigen::VectorXf act_scaled_;
     Eigen::VectorXf act_temp_;
+    // 策略关节空间测量快照（非踝=反馈×sign，踝=FK 关节角×sign，与 Locomotion 日志同口径；
+    // 推理线程写、run() 读，action_mutex_ 保护）
+    std::array<float, NUM_ACTIONS> joint_meas_{};
     Eigen::VectorXf default_pose_;
     std::array<int, NUM_ACTIONS> dof_indices_;
+    std::array<float, NUM_ACTIONS> joint_signs_; // 每个关节动作的符号翻转 (±1.0)
 
     rclcpp::Subscription<sensor_msgs::msg::Imu>::SharedPtr imu_sub_;
     rclcpp::Subscription<geometry_msgs::msg::Twist>::SharedPtr cmd_sub_;
@@ -55,14 +61,18 @@ private:
 
     std::atomic<bool> imu_received_;
     bool require_imu_before_locomotion_;
+    bool enable_action_safety_;
+    float action_delta_limit_;
     double startup_hold_seconds_;
     std::chrono::steady_clock::time_point init_time_;
+    std::chrono::steady_clock::time_point last_imu_time_;  // 最近一次 IMU 数据时间（sensor_data_mutex_ 保护）
+    double imu_timeout_;                                   // IMU 数据超时阈值（秒），超时视为失联并保持姿态
 
     double dt_;
     double phase_period_;
     int frame_stack_;
     int model_obs_dim_;
-    float action_scale_;
+    std::array<float, NUM_ACTIONS> action_scale_;  // 逐关节动作缩放（与训练配置对齐）
     float obs_clip_;
     float act_clip_;
     float obs_scale_lin_vel_;
@@ -71,6 +81,10 @@ private:
     float obs_scale_dof_vel_;
     int counter_;
     bool model_ready_;
+
+    // IMU yaw 零偏（磁力计绝对航向 → 相对初始航向，与训练世界系 yaw≈0 对齐）
+    double yaw_offset_ = 0.0;
+    bool yaw_offset_set_ = false;
 
     std::string model_path_;
     torch::jit::script::Module policy_module_;
@@ -82,6 +96,24 @@ private:
     void initializeParameters();
     void collectObservations();
     void runInference();
+
+    // 通过踝关节 IK 设置踝关节电机位置
+    // 机构方向翻转由 joint_signs_ 统一处理（右踝非镜像结构: joint_signs_[10] = -1）
+    void applyAnkleIK(std::array<float, 23>& positions,
+                      int policy_idx_pitch, int policy_idx_roll);
+
+    // 踝关节并联机构 IK
+    ParallelAnkle ankle_ik_;
+    float prev_L_pitch_ = 0.19f;   // FK 迭代初值：左脚 IK-pitch（对应策略索引4, default 0.3）
+    float prev_L_roll_  = 0.0f;   // FK 迭代初值：左脚 IK-roll （对应策略索引5, default 0.0）
+    float prev_R_pitch_ = 0.19f;   // FK 迭代初值：右脚机构 IK-pitch（非镜像机构, default 机构侧 +0.3）
+    float prev_R_roll_  = 0.0f;   // FK 迭代初值：右脚机构 IK-roll （对应策略索引11, default 0.0）
+
+    // 12维动作中踝关节 pitch/roll 的索引（与 Locomotion 一致）
+    static constexpr int IDX_L_FOOT_PITCH = 4;
+    static constexpr int IDX_L_FOOT_ROLL  = 5;
+    static constexpr int IDX_R_FOOT_PITCH = 10;
+    static constexpr int IDX_R_FOOT_ROLL  = 11;
 };
 
 #endif // ZROBOT_DEPLOY_PT_LOCOMOTION_H

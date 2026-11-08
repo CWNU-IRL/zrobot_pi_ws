@@ -61,7 +61,7 @@ motor_controller_node:
       - 4    # 电机9的类型
       - 3    # 电机10的类型
       - 3    # 电机11的类型
-      - 2    # 电机12的类型
+      - 4    # 电机12的类型
       - 2    # 电机13的类型
       - 2    # 电机14的类型
       - 2    # 电机15的类型
@@ -87,7 +87,7 @@ motor_controller_node:
       - "can1"    # 电机9使用的CAN接口
       - "can1"    # 电机10使用的CAN接口
       - "can1"    # 电机11使用的CAN接口
-      - "can1"    # 电机12使用的CAN接口
+      - "can2"    # 电机12使用的CAN接口
       - "can2"    # 电机13使用的CAN接口
       - "can2"    # 电机14使用的CAN接口
       - "can2"    # 电机15使用的CAN接口
@@ -105,14 +105,14 @@ motor_controller_node:
       - 180.0   # 2  L_knee
       - 120.0   # 3  L_hip_pitch
       - 120.0   # 4  L_hip_yaw
-      - 200.0   # 5  L_hip_roll
+      - 250.0   # 5  L_hip_roll
       - 80.0    # 6  R_foot_pitch
       - 80.0    # 7  R_foot_roll
       - 180.0   # 8  R_knee
       - 120.0   # 9  R_hip_pitch
       - 120.0   # 10 R_hip_yaw
-      - 200.0   # 11 R_hip_roll
-      - 1.0     # 12-22 未接线
+      - 250.0   # 11 R_hip_roll
+      - 100.0     # 12-22 未接线
       - 1.0
       - 1.0
       - 1.0
@@ -124,19 +124,19 @@ motor_controller_node:
       - 1.0
       - 1.0
     motor_kds:
-      - 1.0     # 0  L_foot_pitch
-      - 1.0     # 1  L_foot_roll
+      - 2.0     # 0  L_foot_pitch
+      - 2.0     # 1  L_foot_roll
       - 3.0     # 2  L_knee
-      - 1.0     # 3  L_hip_pitch
-      - 1.0     # 4  L_hip_yaw
+      - 2.0     # 3  L_hip_pitch
+      - 2.0     # 4  L_hip_yaw
       - 3.0     # 5  L_hip_roll
-      - 1.0     # 6  R_foot_pitch
-      - 1.0     # 7  R_foot_roll
+      - 2.0     # 6  R_foot_pitch
+      - 2.0     # 7  R_foot_roll
       - 3.0     # 8  R_knee
-      - 1.0     # 9  R_hip_pitch
-      - 1.0     # 10 R_hip_yaw
+      - 2.0     # 9  R_hip_pitch
+      - 2.0     # 10 R_hip_yaw
       - 3.0     # 11 R_hip_roll
-      - 0.5     # 12-22 未接线
+      - 3.0     # 12-22 未接线
       - 0.5
       - 0.5
       - 0.5

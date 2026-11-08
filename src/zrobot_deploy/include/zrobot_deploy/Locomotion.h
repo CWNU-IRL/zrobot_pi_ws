@@ -2,8 +2,10 @@
 #define ZROBOT_DEPLOY_LOCOMOTION_H
 
 #include "zrobot_deploy/FSM.h"
+#include "zrobot_deploy/paralleljoint_z1.h"
 #include <sensor_msgs/msg/imu.hpp>
 #include <geometry_msgs/msg/twist.hpp>
+#include <battery_control/msg/battery_status.hpp>
 #include <onnxruntime_cxx_api.h>
 #include <Eigen/Dense>
 #include <thread>
@@ -13,6 +15,8 @@
 #include <vector>
 #include <deque>
 #include <array>
+#include <fstream>
+#include <ctime>
 
 // Locomotion 状态机 - 使用 ONNX 模型进行强化学习推理控制
 class Locomotion : public FSM
@@ -24,6 +28,7 @@ public:
     void initialize() override;
     void run() override;
     void exit() override;
+    bool isReady() const override { return model_ready_; }
     
 private:
     // ===== ONNX 推理相关 =====
@@ -52,12 +57,25 @@ private:
     Eigen::VectorXf act_prev_;        // 上一次原始动作 (12维)
     Eigen::VectorXf act_scaled_;      // 缩放后的动作增量 (12维)
     Eigen::VectorXf act_temp_;        // 临时动作缓冲（用于线程安全复制）
+    // 策略关节空间测量快照（非踝=反馈×sign，踝=FK 关节角×sign，与日志 q_curr 同口径；
+    // 推理线程写、run() 读，action_mutex_ 保护）
+    std::array<float, NUM_ACTIONS> joint_meas_{};
     Eigen::VectorXf default_pose_;    // 默认姿态 (12维)
-    std::array<int, NUM_ACTIONS> dof_indices_;  // 12维策略动作映射到23维电机索引
+    std::array<int, NUM_ACTIONS> dof_indices_;   // 12维策略动作映射到23维电机索引
+    std::array<float, NUM_ACTIONS> joint_signs_; // 每个关节动作的符号翻转 (±1.0)，用于匹配仿真→实物方向
     
     // ===== ROS 话题订阅相关 =====
     rclcpp::Subscription<sensor_msgs::msg::Imu>::SharedPtr imu_sub_;
     rclcpp::Subscription<geometry_msgs::msg::Twist>::SharedPtr cmd_sub_;
+    // 电池遥测（/battery/status，BMS 2Hz）：电压/电流写入 CSV 并用于欠压保护
+    rclcpp::Subscription<battery_control::msg::BatteryStatus>::SharedPtr battery_sub_;
+    std::mutex battery_mutex_;
+    bool battery_received_ = false;
+    double batt_voltage_ = 0.0;   // V（0=无效）
+    double batt_current_ = 0.0;   // A（放电为正；心跳帧来源时无电流值）
+    int batt_soc_ = -1;           // %
+    bool batt_online_ = true;     // BMS 链路在线（false=状态可能为冻结旧值）
+    std::chrono::steady_clock::time_point last_battery_time_;
     
     // 当前传感器数据
     Eigen::Vector3f current_angular_velocity_;   // 角速度 (3维)
@@ -78,34 +96,87 @@ private:
      bool require_imu_before_locomotion_;
      bool enable_action_safety_;
      double startup_hold_seconds_;
-     float action_delta_limit_;
-     float action_abs_limit_;
+     float action_filter_alpha_;      // 动作一阶低通系数（训练 zrobot_env delay 滤波同族）
+     double action_fade_in_seconds_;  // hold 结束后动作线性渐入时长（<=0 关闭）
      std::chrono::steady_clock::time_point init_time_;
-    
+     std::chrono::steady_clock::time_point last_imu_time_;  // 最近一次 IMU 数据时间（sensor_data_mutex_ 保护）
+     double imu_timeout_;                                   // IMU 数据超时阈值（秒），超时视为失联并保持姿态
+     // 欠压保护（BMS 电压）：低于 warn 打点告警，低于 trip 切 Damping（<=0 关闭）
+     double vbus_warn_threshold_;     // V
+     double vbus_trip_threshold_;     // V
+
     // ===== 控制参数 =====
     double dt_;                                   // 控制周期 (秒)
     double phase_period_;                         // 相位周期 (秒)
     int frame_stack_;                             // 观测堆叠帧数
     int model_obs_dim_;                           // 模型输入维度
-    float action_scale_;                          // 动作缩放
+    std::array<float, NUM_ACTIONS> action_scale_;  // 逐关节动作缩放（与训练配置对齐）
     float obs_clip_;                              // 观测裁剪
     float act_clip_;                              // 动作裁剪
     float obs_scale_lin_vel_;                     // cmd线速度缩放
     float obs_scale_ang_vel_;                     // cmd角速度缩放
     float obs_scale_dof_pos_;                     // 关节角缩放
     float obs_scale_dof_vel_;                     // 关节速度缩放
-    int counter_;                                 // 循环计数器（用于相位计算）
+    int counter_;                                 // 推理循环计数（仅统计，相位改用墙钟）
     bool model_ready_;                            // 模型是否可推理
+
+    // 数据记录（CSV：obs 输入 + action 输出 + 目标/反馈，对齐 sim2sim 日志）
+    std::ofstream log_file_;
+    bool enable_logging_;
+    int log_decimation_;                          // 每 N 个推理周期写一行
+
+    // ===== CSV 轨迹回放（诊断）：用 sim2sim 日志的策略目标/仿真实测替代策略输出 =====
+    std::string replay_mode_;       // off / target_q / q_curr
+    std::string replay_csv_path_;
+    bool replay_loaded_ = false;
+    std::vector<std::array<float, NUM_ACTIONS>> replay_target_;  // [帧][12] 策略空间绝对角(rad)
+    std::vector<std::array<float, NUM_ACTIONS>> replay_qcurr_;
+    // 仿真时钟常量：sim 相位钟 hold 期间不冻结，step300 已走 0.3s 相位
+    static constexpr long kReplayStartStep = 300;
+    static constexpr double kReplaySimDt = 0.001;
+    double replay_phase_offset_ = 0.0;      // 回放模式相位钟前移量（秒），非回放=0
+    double replay_handoff_seconds_ = -1.0;  // <0=回放至 CSV 末尾；>=0 motion_t 到点后策略接管
+    bool replay_handed_off_ = false;        // 交接是否已发生（打点用）
+
+    // IMU yaw 零偏（磁力计绝对航向 → 相对初始航向，与训练世界系 yaw≈0 对齐）
+    double yaw_offset_ = 0.0;
+    bool yaw_offset_set_ = false;
+
+    // 踝关节并联机构 IK
+    ParallelAnkle ankle_ik_;
+    float prev_L_pitch_ = 0.19f;   // FK 迭代初值：左脚 IK-pitch（对应策略索引4, default 0.3）
+    float prev_L_roll_  = 0.0f;   // FK 迭代初值：左脚 IK-roll （对应策略索引5, default 0.0）
+    float prev_R_pitch_ = 0.19f;   // FK 迭代初值：右脚机构 IK-pitch（非镜像机构, default 机构侧 +0.3）
+    float prev_R_roll_  = 0.0f;   // FK 迭代初值：右脚机构 IK-roll （对应策略索引11, default 0.0）
+    
+    // 12维动作中踝关节 pitch/roll 的索引
+    // static constexpr int IDX_L_FOOT_PITCH = 4;
+    // static constexpr int IDX_L_FOOT_ROLL  = 5;
+    // static constexpr int IDX_R_FOOT_PITCH = 10;
+    // static constexpr int IDX_R_FOOT_ROLL  = 11;
+    static constexpr int IDX_L_FOOT_PITCH = 4;
+    static constexpr int IDX_L_FOOT_ROLL  = 5;
+    static constexpr int IDX_R_FOOT_PITCH = 10;
+    static constexpr int IDX_R_FOOT_ROLL  = 11;
 
     // 加载 ONNX 模型
     void loadPolicy(const std::string& model_path);
+
+    // 加载 sim2sim 回放 CSV（长格式 step,joint,action,target_q,q_curr,tau；仅取 step>=300）
+    bool loadReplayCsv(const std::string& path);
     
     // 推理线程函数
     void inferenceLoop();
     
+    // 通过踝关节 IK 设置踝关节电机位置
+    // 机构方向翻转由 joint_signs_ 统一处理（右踝非镜像结构: joint_signs_[10] = -1）
+    void applyAnkleIK(std::array<float, 23>& positions,
+                      int policy_idx_pitch, int policy_idx_roll);
+    
     // ROS 回调函数
     void imuCallback(const sensor_msgs::msg::Imu::SharedPtr msg);
     void cmdCallback(const geometry_msgs::msg::Twist::SharedPtr msg);
+    void batteryCallback(const battery_control::msg::BatteryStatus::SharedPtr msg);
     
     // 初始化参数
     void initializeParameters();
@@ -115,6 +186,9 @@ private:
     
     // 执行 ONNX 推理
     void runInference();
+
+    // 写一行 CSV: seq,t,obs[47],act_policy[12],act_applied[12],target_q[12],q_curr[12],tau_motor[12]
+    void writeLogRow(const Eigen::VectorXf& policy_action, const Eigen::VectorXf& applied_action);
 };
 
 #endif // ZROBOT_DEPLOY_LOCOMOTION_H
