@@ -64,12 +64,16 @@ private:
     Eigen::Vector3f current_gravity_vector_;     // 重力向量 (3维)
     Eigen::Vector3f current_euler_;              // 欧拉角 (roll, pitch, yaw)
     Eigen::Vector3f current_command_;            // 遥控命令 (3维: vx, vy, wz)
-    
+    bool cmd_received_ = false;
+    std::chrono::steady_clock::time_point last_cmd_time_;
+    double cmd_vel_timeout_ms_ = 300.0;
+
     std::mutex sensor_data_mutex_;               // 传感器数据锁
     
     // ===== 推理线程相关 =====
     std::thread inference_thread_;
     std::atomic<bool> thread_running_;
+    std::atomic<bool> inference_gate_{false};     // 状态失效时暂停推理
     std::mutex action_mutex_;                     // 动作数据锁
 
      // 启动与安全保护

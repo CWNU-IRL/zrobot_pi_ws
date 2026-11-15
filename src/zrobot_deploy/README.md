@@ -2,7 +2,7 @@
 
 ## 概述
 
-ZRobot 的核心运动控制部署包。实现基于有限状态机的运动控制器框架，包含 4 种可切换的状态机：`FixStand`（固定站立）、`Locomotion`（ONNX 模型推理）、`PTLocomotion`（TorchScript 模型推理）和 `Damping`（虚拟阻尼）。通过 `rs_interface` 的统一服务接口与底层电机桥接通信，支持实机与仿真无缝切换。
+ZRobot 的核心运动控制部署包。实现基于有限状态机的运动控制器框架，包含 4 种可切换的状态机：`FixStand`（固定站立）、`Locomotion`（ONNX 模型推理）、`PTLocomotion`（TorchScript 模型推理）和 `Damping`（驱动阻尼）。通过 `rs_interface` 的 `/joint_cmd` / `/joint_state` 命令流契约与底层电机桥接通信，支持实机与仿真无缝切换。
 
 ## 依赖
 
@@ -48,27 +48,29 @@ ros2 run zrobot_deploy main
 | `F`  | FixStand     | 3 秒线性插值到站立姿态并保持                      |
 | `L`  | Locomotion   | ONNX Runtime 推理运动（需 IMU 数据）              |
 | `T`  | PTLocomotion | LibTorch 推理运动（需 IMU 数据）                  |
-| `D`  | Damping      | 软件阻尼模式                                      |
+| `D`  | Damping      | 发布 damp 命令，由驱动做阻尼                      |
 | `S`  | Stop         | 停止当前状态机（Damping 停止后自动恢复 FixStand） |
 | `Q`  | Quit         | 退出程序                                          |
 
-主循环运行在 **100 Hz**，键盘检测非阻塞，ROS 回调通过 `rclcpp::spin_some()` 异步处理。
+主循环运行在 **100 Hz**，键盘检测非阻塞；ROS 回调由独立 `SingleThreadedExecutor` 线程处理，`initialize()` 可在主线程安全等待首帧 `/joint_state`。
 
 ## ROS 2 接口
 
 ### 订阅的话题
 
-| 话题名      | 类型                      | 说明                                           |
-| ----------- | ------------------------- | ---------------------------------------------- |
-| `/imu/data` | `sensor_msgs/msg/Imu`     | IMU 数据（Locomotion / PTLocomotion 使用）     |
-| `cmd_vel`   | `geometry_msgs/msg/Twist` | 遥控速度指令（Locomotion / PTLocomotion 使用） |
+| 话题名         | 类型                                | 说明 |
+| -------------- | ----------------------------------- | ---- |
+| `/joint_state` | `rs_interface/msg/JointState`       | 23 路电机反馈 + `valid[]`，QoS best effort / depth 1 |
+| `/imu/data`    | `sensor_msgs/msg/Imu`               | IMU 数据（Locomotion / PTLocomotion 使用） |
+| `cmd_vel`      | `geometry_msgs/msg/Twist`           | 遥控速度指令（Locomotion / PTLocomotion 使用） |
 
-### 调用的服务
+### 发布的话题
 
-| 服务名                | 服务类型                         | 说明                   |
-| --------------------- | -------------------------------- | ---------------------- |
-| `/rob_stride_control` | `rs_interface/srv/RobStrideMsgs` | 发送 23 个电机位置指令 |
-| `/get_positions`      | `rs_interface/srv/GetPositions`  | 读取当前电机位置       |
+| 话题名      | 类型                        | 说明 |
+| ----------- | --------------------------- | ---- |
+| `/joint_cmd` | `rs_interface/msg/JointCmd` | reliable / depth 1；`mit/enable/damp/disable/set_zero/status` |
+
+`initialize()` 先发布 `enable`，然后等待首帧 `/joint_state` 且 12 个主动关节 `valid=true`；不再有服务调用或 `spin_until_future_complete` 阻塞。
 
 ## 项目结构
 
@@ -81,14 +83,14 @@ zrobot_deploy/
 │   ├── FixStand.h         # 固定站立状态
 │   ├── Locomotion.h       # ONNX 推理运动状态
 │   ├── PTLocomotion.h     # TorchScript 推理运动状态
-│   └── Damping.h          # 虚拟阻尼状态
+│   └── Damping.h          # 驱动阻尼状态
 └── src/
     ├── main.cpp            # FSM 控制器入口 + 键盘交互
-    ├── FSM.cpp             # 基类实现（服务调用封装）
+    ├── FSM.cpp             # 基类实现（命令发布/状态缓存）
     ├── FixStand.cpp        # 站立姿态插值
     ├── Locomotion.cpp      # ONNX 模型加载 + 推理循环
     ├── PTLocomotion.cpp    # TorchScript 模型加载 + 推理循环
-    └── Damping.cpp         # 虚拟阻尼计算
+    └── Damping.cpp         # damp 命令发布
 ```
 
 ## 技术细节
@@ -113,10 +115,13 @@ zrobot_deploy/
 ```
 
 所有状态机继承自 `FSM` 基类，基类封装了：
-- 两个服务客户端（`/rob_stride_control`, `/get_positions`）
-- `sendMotorPositions()` — 发送 23 电机位置（100 ms 超时）
-- `getMotorFeedback()` — 读取缓存反馈
-- `getCurrentPositions()` — 通过服务读取位置（最长 5 s 超时）
+- `/joint_cmd` publisher（reliable / depth 1）与 `/joint_state` subscriber（best effort / depth 1）
+- `sendMotorPositions()` — 发布 23 路 MIT 位置命令（非阻塞）
+- `getMotorFeedback()` / `getCurrentPositions()` — 读取最新状态缓存
+- `stateFresh()` / `activeJointsValid()` — 状态新鲜度与有效性门控
+- `sendDampCommand()` — 发布 `damp`，由驱动使用自身反馈做阻尼
+
+Locomotion / PTLocomotion 在 `/joint_state` 超时或主动关节 `valid=false` 时暂停推理并发布 `damp`；`cmd_vel` 超过 `cmd_vel_timeout_ms` 未更新时速度指令清零。`Q` 退出时 `main` 发布一次 `damp`。
 
 ### FixStand（固定站立）
 
@@ -154,12 +159,11 @@ zrobot_deploy/
 - 观测空间、动作空间、控制逻辑与 `Locomotion` 相同
 - 使用 `torch::NoGradGuard()` 确保推理时不计算梯度
 
-### Damping（虚拟阻尼）
+### Damping（驱动阻尼）
 
 - 用于机器人倒地等非正常状态下的安全保护
-- 计算公式：`q_cmd = q_fb - kd * dq_fb`
-- 可配置参数：`kd_default = 0.08`、`velocity_deadband = 0.02`、`max_position_delta = 0.15`、每关节独立 kd 数组
-- 首次调用时将当前位置作为历史值缓存
+- 每周期发布 `command="damp"`；bridge 使用最后有效反馈位置、`kp=0`、`kd=damping_kd` 生成阻尼命令
+- 阻尼增益在 bridge 的 `motor_config.yaml` 中配置，deploy 不再计算软件阻尼位置
 
 ### 构建说明
 

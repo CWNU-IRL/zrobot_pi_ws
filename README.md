@@ -1,6 +1,6 @@
 # ZRobot Pi Workspace
 
-基于 ROS 2 的 ZRobot 双足机器人控制与仿真工作空间，覆盖硬件驱动（CAN 电机、IMU 传感器）到上层运动控制（有限状态机 + 强化学习推理），并提供 Gazebo 和 MuJoCo 双仿真环境。所有控制节点通过统一 ROS 2 服务接口通信，实现实机与仿真间的无缝切换。
+基于 ROS 2 的 ZRobot 双足机器人控制与仿真工作空间，覆盖硬件驱动（CAN 电机、IMU 传感器）到上层运动控制（有限状态机 + 强化学习推理），并提供 Gazebo 和 MuJoCo 双仿真环境。控制层通过统一的 `/joint_cmd` → `/joint_state` 命令流契约与底层通信，实现实机与仿真间的无缝切换。
 
 ## 快速开始
 
@@ -100,7 +100,7 @@ ros2 run zrobot_deploy main
 | `F`  | FixStand     | 3 秒线性插值到站立姿态并保持                      |
 | `L`  | Locomotion   | ONNX Runtime 推理运动（需 IMU 数据）              |
 | `T`  | PTLocomotion | LibTorch 推理运动（需 IMU 数据）                  |
-| `D`  | Damping      | 软件阻尼模式（倒地保护）                          |
+| `D`  | Damping      | 发布 damp 命令，驱动侧阻尼（倒地保护）            |
 | `S`  | Stop         | 停止当前状态机（Damping 停止后自动恢复 FixStand） |
 | `Q`  | Quit         | 退出程序                                          |
 
@@ -126,7 +126,7 @@ python3 scripts/pt2onnx.py --jit_model policy_1.pt --onnx_model policy.onnx --ob
 zrobot_pi_ws/
 ├── src/                          # ROS 2 包源码
 │   ├── imu_msg/                  # 自定义 IMU 消息（ImuData.msg）
-│   ├── rs_interface/             # 自定义电机控制服务（3 个 srv）
+│   ├── rs_interface/             # 命令流消息（JointCmd/JointState/MotorTelemetry）
 │   ├── imu_data_node/            # WIT 系列 IMU 串口驱动（TTL/CAN/RS485）
 │   ├── zrobot_bridge/            # RobStride 电机 CAN 总线桥接（实机）
 │   ├── zrobot_control/           # 键盘遥控 cmd_vel 发布节点
@@ -152,7 +152,7 @@ zrobot_pi_ws/
 | 包名                                             | 类型        | 说明                                                                  |
 | ------------------------------------------------ | ----------- | --------------------------------------------------------------------- |
 | [`imu_msg`](src/imu_msg/README.md)               | 接口（msg） | `ImuData` 消息：标准 IMU + 欧拉角扩展                                 |
-| [`rs_interface`](src/rs_interface/README.md)     | 接口（srv） | 3 个电机控制服务定义                                                  |
+| [`rs_interface`](src/rs_interface/README.md)     | 接口（msg） | 命令流与状态消息定义，保留 SetZeros 服务                              |
 | [`imu_data_node`](src/imu_data_node/README.md)   | 驱动        | WIT 系列 IMU 数据采集，50 Hz 双话题发布                               |
 | [`zrobot_bridge`](src/zrobot_bridge/README.md)   | 驱动        | CAN 总线控制 23 个 RobStride 电机，4 路 CAN                           |
 | [`zrobot_control`](src/zrobot_control/README.md) | 输入        | 键盘遥控，WASD 控制 + 150 ms 自动归零                                 |
@@ -163,19 +163,22 @@ zrobot_pi_ws/
 
 ## 关键概念
 
-### 统一服务接口
+### 统一主题接口
 
-`zrobot_bridge`（实机）、`zrobot_gz_sim`、`zrobot_mj_sim` 三个包均提供相同的三个 ROS 2 服务，控制层通过服务名调用，无需关心底层是实机还是仿真：
+`zrobot_bridge`（实机）、`zrobot_gz_sim`、`zrobot_mj_sim` 三个包使用同一套命令流契约，控制层只发布意图，状态通过独立 Topic 回传：
 
-| 服务                  | 请求                    | 响应                                                       |
-| --------------------- | ----------------------- | ---------------------------------------------------------- |
-| `/rob_stride_control` | `float32[23] positions` | `feedback_positions / velocities / torques / temperatures` |
-| `/get_positions`      | （空）                  | `float32[23] feedback_positions`                           |
-| `/set_zeros`          | （空）                  | `success + message`                                        |
+| Topic              | 方向             | QoS                         | 说明                                                  |
+| ------------------ | ---------------- | --------------------------- | ----------------------------------------------------- |
+| `/joint_cmd`       | deploy → bridge  | reliable, depth 1           | `JointCmd`：`mit/enable/disable/stop/damp/set_zero/status` |
+| `/joint_state`     | bridge → deploy  | best effort, depth 1        | `JointState`：23 路位置/速度/力矩/温度 + `valid[]`    |
+| `/motor_telemetry` | bridge → 监控    | best effort, depth 1, 10 Hz | 温度、错误码、反馈年龄、在线状态、安全状态             |
+| `/set_zeros`       | 工具 → 实机 bridge | service                   | 标定请求只入队，由维护槽执行                          |
+
+实机 bridge 以 100 Hz tick 完成 23 路非阻塞写和短超时收包；命令超过 `command_timeout_ms`（默认 300 ms）未更新时自动进入阻尼。`live=false` 时不打开 CAN，`/joint_state` 回显命令状态，便于无硬件联调 deploy。
 
 ### 23 电机与 12 驱动关节
 
-机器人总定义 23 个关节，其中 12 个腿部关节（左右各 6：hip_roll / yaw / pitch + knee + foot_pitch / roll）由 RL 策略直接控制。上肢关节在实机中有电机但在仿真中固定，通过 `active_joint_count_` 处理差异。
+机器人总定义 23 个关节，其中 12 个腿部关节（左右各 6：hip_roll / yaw / pitch + knee + foot_pitch / roll）由 RL 策略直接控制。数组长度固定为 23，仿真未接线的 12..22 通道补 0；权威关节顺序由各节点 `joint_names` 参数统一定义。
 
 ### RL 推理
 

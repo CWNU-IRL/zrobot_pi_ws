@@ -18,8 +18,53 @@
 
 motor_controller_node:
   ros__parameters:
+    # false 时不打开 CAN，仅回显命令状态，便于在无硬件的笔记本上联调 deploy
+    live: true
+
     # 主机ID
     master_id: 0xFD
+
+    # 唯一权威的 0..22 关节顺序。/joint_state 与 /joint_cmd 的 name 均按此顺序发布/解释，
+    # deploy 的 dof_indices/default_pose 与仿真桥也使用同一顺序。迁移不重排电机。
+    joint_names:
+      - L_hip_roll_joint
+      - L_hip_yaw_joint
+      - L_hip_pitch_joint
+      - L_knee_joint
+      - L_foot_pitch_joint
+      - L_foot_roll_joint
+      - R_hip_roll_joint
+      - R_hip_yaw_joint
+      - R_hip_pitch_joint
+      - R_knee_joint
+      - R_foot_pitch_joint
+      - R_foot_roll_joint
+      - joint_12
+      - joint_13
+      - joint_14
+      - joint_15
+      - joint_16
+      - joint_17
+      - joint_18
+      - joint_19
+      - joint_20
+      - joint_21
+      - joint_22
+
+    # Topic 契约
+    joint_cmd_topic: "/joint_cmd"
+    joint_state_topic: "/joint_state"
+    telemetry_topic: "/motor_telemetry"
+
+    # Tick 与安全参数
+    control_frequency_hz: 100.0
+    telemetry_frequency_hz: 10.0
+    command_timeout_ms: 300
+    feedback_timeout_ms: 100
+    # 0 表示关闭；>0 时在无新命令该时长后自动失能
+    auto_disable_after_ms: 0
+    # 超时/阻尼命令使用的 Kd，Kp 固定为 0
+    damping_kd: 1.0
 
     # 23个电机的CAN ID配置
     motor_can_ids:
@@ -99,19 +144,20 @@ motor_controller_node:
       - "can3"    # 电机21使用的CAN接口
       - "can3"    # 电机22使用的CAN接口
 
+    # 以下数值未做任何重排，仅将注释对齐到上方 joint_names 的权威 0..22 顺序。
     motor_kps:
-      - 80.0    # 0  L_foot_pitch
-      - 80.0    # 1  L_foot_roll
-      - 180.0   # 2  L_knee
-      - 120.0   # 3  L_hip_pitch
-      - 120.0   # 4  L_hip_yaw
-      - 200.0   # 5  L_hip_roll
-      - 80.0    # 6  R_foot_pitch
-      - 80.0    # 7  R_foot_roll
-      - 180.0   # 8  R_knee
-      - 120.0   # 9  R_hip_pitch
-      - 120.0   # 10 R_hip_yaw
-      - 200.0   # 11 R_hip_roll
+      - 80.0    # 0  L_hip_roll
+      - 80.0    # 1  L_hip_yaw
+      - 180.0   # 2  L_hip_pitch
+      - 120.0   # 3  L_knee
+      - 120.0   # 4  L_foot_pitch
+      - 200.0   # 5  L_foot_roll
+      - 80.0    # 6  R_hip_roll
+      - 80.0    # 7  R_hip_yaw
+      - 180.0   # 8  R_hip_pitch
+      - 120.0   # 9  R_knee
+      - 120.0   # 10 R_foot_pitch
+      - 200.0   # 11 R_foot_roll
       - 1.0     # 12-22 未接线
       - 1.0
       - 1.0
@@ -124,18 +170,18 @@ motor_controller_node:
       - 1.0
       - 1.0
     motor_kds:
-      - 1.0     # 0  L_foot_pitch
-      - 1.0     # 1  L_foot_roll
-      - 3.0     # 2  L_knee
-      - 1.0     # 3  L_hip_pitch
-      - 1.0     # 4  L_hip_yaw
-      - 3.0     # 5  L_hip_roll
-      - 1.0     # 6  R_foot_pitch
-      - 1.0     # 7  R_foot_roll
-      - 3.0     # 8  R_knee
-      - 1.0     # 9  R_hip_pitch
-      - 1.0     # 10 R_hip_yaw
-      - 3.0     # 11 R_hip_roll
+      - 1.0     # 0  L_hip_roll
+      - 1.0     # 1  L_hip_yaw
+      - 3.0     # 2  L_hip_pitch
+      - 1.0     # 3  L_knee
+      - 1.0     # 4  L_foot_pitch
+      - 3.0     # 5  L_foot_roll
+      - 1.0     # 6  R_hip_roll
+      - 1.0     # 7  R_hip_yaw
+      - 3.0     # 8  R_hip_pitch
+      - 1.0     # 9  R_knee
+      - 1.0     # 10 R_foot_pitch
+      - 3.0     # 11 R_foot_roll
       - 0.5     # 12-22 未接线
       - 0.5
       - 0.5
@@ -149,6 +195,7 @@ motor_controller_node:
       - 0.5
 
     # ==================== 推荐配置（暂以注释保留，启用时替换上方 motor_kps/motor_kds）====================
+    # 注意：以下历史注释按另一种关节顺序书写，与上方 joint_names 不一致；启用前必须按 joint_names 重新映射。
     # 当前 kp=1.0/kd=0.5 与训练增益严重不匹配。部署层只发位置目标，实际力矩由电机内部 PD 产生：
     #   τ = kp×(q*−q) − kd×q̇
     # Kp=1.0 Nm/rad 时 0.3 rad 偏差仅 0.3 Nm 恢复力，机器人无法站立/行走。

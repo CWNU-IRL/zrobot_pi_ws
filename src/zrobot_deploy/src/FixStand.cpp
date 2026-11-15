@@ -36,13 +36,11 @@ void FixStand::initialize()
     
     RCLCPP_INFO(node_->get_logger(), "FixStand initializing...");
     
-    // 获取当前电机位置作为初始位置
+    // 使用首帧 /joint_state 缓存作为插值起点
     if (getCurrentPositions(initial_positions_)) {
-        RCLCPP_INFO(node_->get_logger(), "Initial positions read successfully from get_positions service");
-        // RCLCPP_DEBUG(node_->get_logger(), "Sample positions: [0]=%.3f, [1]=%.3f, [2]=%.3f rad", 
-        //             initial_positions_[0], initial_positions_[1], initial_positions_[2]);
+        RCLCPP_INFO(node_->get_logger(), "Initial positions read from /joint_state cache");
     } else {
-        RCLCPP_WARN(node_->get_logger(), "Failed to read initial positions from service, assuming zero");
+        RCLCPP_WARN(node_->get_logger(), "No /joint_state received yet, assuming zero initial positions");
         initial_positions_.fill(0.0f);
     }
     

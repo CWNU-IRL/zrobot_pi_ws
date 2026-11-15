@@ -43,18 +43,45 @@ MujocoMotorBridgeNode::MujocoMotorBridgeNode()
       publish_imu_(true),
       publish_clock_(true),
       has_state_(false),
-      is_target_initialized_(false),
+      enabled_(false),
+      damping_mode_(false),
+      has_mit_command_(false),
+      command_stale_(false),
+      command_timeout_ms_(300.0),
+      damping_kd_(1.0),
+      state_publish_hz_(100.0),
+      state_publish_divider_(2),
+      state_publish_counter_(0),
+      telemetry_hz_(10.0),
+      telemetry_divider_(20),
+      telemetry_counter_(0),
       control_mode_(ControlMode::kTorquePd),
       model_(nullptr),
       data_(nullptr)
 {
     render_instance_ = this;
-    joint_names_ = declare_parameter<std::vector<std::string>>("joint_names", default_joint_names());
+    const auto defaults = default_joint_names();
+    joint_names_ = declare_parameter<std::vector<std::string>>("joint_names", defaults);
+    if (joint_names_.size() != kNumMotors)
+    {
+        RCLCPP_WARN(get_logger(), "joint_names size is %zu, expected %zu. Using defaults.",
+                    joint_names_.size(), kNumMotors);
+        joint_names_ = defaults;
+    }
+    active_joint_count_ = static_cast<size_t>(std::clamp<int64_t>(
+        declare_parameter<int>("active_joint_count", 12), 0,
+        static_cast<int64_t>(kNumMotors)));
+    for (size_t i = 0; i < kNumMotors; ++i)
+    {
+        joint_name_to_index_[joint_names_[i]] = i;
+    }
 
     std::vector<double> default_kp = default_kp_vec(kNumMotors);
     std::vector<double> default_kd(kNumMotors, kDefaultKd);
     kp_ = declare_parameter<std::vector<double>>("kp", default_kp);
     kd_ = declare_parameter<std::vector<double>>("kd", default_kd);
+    kp_.resize(kNumMotors, kDefaultKp);
+    kd_.resize(kNumMotors, kDefaultKd);
 
     control_mode_param_ = declare_parameter<std::string>("control_mode", "torque_pd");
     control_frequency_ = declare_parameter<double>("control_frequency", kDefaultControlFrequency);
@@ -66,33 +93,10 @@ MujocoMotorBridgeNode::MujocoMotorBridgeNode()
     imu_frame_ = declare_parameter<std::string>("imu_frame", "imu");
     model_path_ = declare_parameter<std::string>("model_path", "");
     position_model_path_ = declare_parameter<std::string>("position_model_path", "");
-
-    if (joint_names_.empty())
-    {
-        RCLCPP_WARN(get_logger(), "joint_names is empty. Falling back to defaults.");
-        joint_names_ = default_joint_names();
-    }
-
-    if (joint_names_.size() > kNumMotors)
-    {
-        RCLCPP_WARN(get_logger(), "joint_names size is %zu, truncating to %zu.", joint_names_.size(), kNumMotors);
-        joint_names_.resize(kNumMotors);
-    }
-
-    active_joint_count_ = joint_names_.size();
-
-    if (kp_.size() < active_joint_count_)
-    {
-        RCLCPP_WARN(get_logger(), "kp size (%zu) is less than active joints (%zu). Padding with %.1f.",
-                    kp_.size(), active_joint_count_, kDefaultKp);
-        kp_.resize(active_joint_count_, kDefaultKp);
-    }
-    if (kd_.size() < active_joint_count_)
-    {
-        RCLCPP_WARN(get_logger(), "kd size (%zu) is less than active joints (%zu). Padding with %.1f.",
-                    kd_.size(), active_joint_count_, kDefaultKd);
-        kd_.resize(active_joint_count_, kDefaultKd);
-    }
+    command_timeout_ms_ = static_cast<double>(declare_parameter<int>("command_timeout_ms", 300));
+    damping_kd_ = declare_parameter<double>("damping_kd", 1.0);
+    state_publish_hz_ = declare_parameter<double>("state_publish_hz", 100.0);
+    telemetry_hz_ = declare_parameter<double>("telemetry_hz", 10.0);
 
     if (control_mode_param_ == "position")
     {
@@ -137,6 +141,10 @@ MujocoMotorBridgeNode::MujocoMotorBridgeNode()
     last_velocities_.fill(0.0f);
     last_efforts_.fill(0.0f);
     target_positions_.fill(0.0f);
+    target_velocities_.fill(0.0f);
+    target_torques_.fill(0.0f);
+    target_kps_.fill(static_cast<float>(kDefaultKp));
+    target_kds_.fill(static_cast<float>(kDefaultKd));
 
     {
         std::lock_guard<std::mutex> lock(state_mutex_);
@@ -148,26 +156,28 @@ MujocoMotorBridgeNode::MujocoMotorBridgeNode()
     accel_sensor_ = find_sensor_handle("linear-acceleration");
 
     joint_state_pub_ = create_publisher<sensor_msgs::msg::JointState>("/joint_states", 10);
+    contract_state_pub_ = create_publisher<rs_interface::msg::JointState>(
+        "/joint_state", rclcpp::QoS(1).best_effort());
+    telemetry_pub_ = create_publisher<rs_interface::msg::MotorTelemetry>(
+        "/motor_telemetry", rclcpp::QoS(1).best_effort());
     imu_pub_ = create_publisher<sensor_msgs::msg::Imu>("/imu/data", 10);
     clock_pub_ = create_publisher<rosgraph_msgs::msg::Clock>("/clock", 10);
 
-    rob_stride_service_ = create_service<rs_interface::srv::RobStrideMsgs>(
-        "/rob_stride_control",
-        std::bind(&MujocoMotorBridgeNode::on_rob_stride_control, this, std::placeholders::_1, std::placeholders::_2));
-
-    get_positions_service_ = create_service<rs_interface::srv::GetPositions>(
-        "/get_positions",
-        std::bind(&MujocoMotorBridgeNode::on_get_positions, this, std::placeholders::_1, std::placeholders::_2));
-
-    set_zeros_service_ = create_service<rs_interface::srv::SetZeros>(
-        "/set_zeros",
-        std::bind(&MujocoMotorBridgeNode::on_set_zeros, this, std::placeholders::_1, std::placeholders::_2));
+    joint_cmd_sub_ = create_subscription<rs_interface::msg::JointCmd>(
+        "/joint_cmd", rclcpp::QoS(1).reliable(),
+        std::bind(&MujocoMotorBridgeNode::on_joint_cmd, this, std::placeholders::_1));
 
     if (control_frequency_ <= 1e-6)
     {
         RCLCPP_WARN(get_logger(), "control_frequency too small; defaulting to %.1f Hz.", kDefaultControlFrequency);
         control_frequency_ = kDefaultControlFrequency;
     }
+    state_publish_hz_ = std::max(1.0, state_publish_hz_);
+    telemetry_hz_ = std::max(1.0, telemetry_hz_);
+    state_publish_divider_ = static_cast<uint64_t>(
+        std::max(1.0, std::round(control_frequency_ / state_publish_hz_)));
+    telemetry_divider_ = static_cast<uint64_t>(
+        std::max(1.0, std::round(control_frequency_ / telemetry_hz_)));
 
     const double sim_dt = (model_ && model_->opt.timestep > 0.0) ? model_->opt.timestep : 0.001;
     const double desired_dt = 1.0 / control_frequency_;
@@ -213,18 +223,12 @@ MujocoMotorBridgeNode::~MujocoMotorBridgeNode()
 std::vector<std::string> MujocoMotorBridgeNode::default_joint_names()
 {
     return {
-        "L_hip_roll_joint",
-        "L_hip_yaw_joint",
-        "L_hip_pitch_joint",
-        "L_knee_joint",
-        "L_foot_pitch_joint",
-        "L_foot_roll_joint",
-        "R_hip_roll_joint",
-        "R_hip_yaw_joint",
-        "R_hip_pitch_joint",
-        "R_knee_joint",
-        "R_foot_pitch_joint",
-        "R_foot_roll_joint"};
+        "L_hip_roll_joint", "L_hip_yaw_joint", "L_hip_pitch_joint", "L_knee_joint",
+        "L_foot_pitch_joint", "L_foot_roll_joint",
+        "R_hip_roll_joint", "R_hip_yaw_joint", "R_hip_pitch_joint", "R_knee_joint",
+        "R_foot_pitch_joint", "R_foot_roll_joint",
+        "joint_12", "joint_13", "joint_14", "joint_15", "joint_16", "joint_17",
+        "joint_18", "joint_19", "joint_20", "joint_21", "joint_22"};
 }
 
 /**
@@ -362,6 +366,17 @@ void MujocoMotorBridgeNode::apply_control_locked()
         std::fill(data_->ctrl, data_->ctrl + model_->nu, 0.0);
     }
 
+    if (!enabled_)
+    {
+        return;
+    }
+
+    const bool stale = has_mit_command_ &&
+        (std::chrono::steady_clock::now() - last_command_time_) >
+            std::chrono::duration<double, std::milli>(command_timeout_ms_);
+    command_stale_ = stale;
+    const bool use_damping = damping_mode_ || stale || !has_mit_command_;
+
     for (size_t i = 0; i < active_joint_count_; ++i)
     {
         const JointHandle &handle = joint_handles_[i];
@@ -370,15 +385,27 @@ void MujocoMotorBridgeNode::apply_control_locked()
             continue;
         }
 
-        const double target_q = target_positions_[i];
         const double current_q = data_->qpos[handle.qpos_adr];
         const double current_dq = data_->qvel[handle.dof_adr];
-        const double target_dq = 0.0;
+        double target_q = current_q;
+        double target_dq = 0.0;
+        double torque_ff = 0.0;
+        double kp = 0.0;
+        double kd = damping_kd_;
+
+        if (!use_damping)
+        {
+            target_q = target_positions_[i] + zero_offsets_[i];
+            target_dq = target_velocities_[i];
+            torque_ff = target_torques_[i];
+            kp = target_kps_[i];
+            kd = target_kds_[i];
+        }
 
         if (control_mode_ == ControlMode::kTorquePd)
         {
-            const double tau = compute_tau(target_q, current_q, target_dq, current_dq, kp_[i], kd_[i]);
-            data_->ctrl[handle.actuator_id] = tau;
+            data_->ctrl[handle.actuator_id] =
+                compute_tau(target_q, current_q, target_dq, current_dq, kp, kd) + torque_ff;
         }
         else
         {
@@ -419,11 +446,6 @@ void MujocoMotorBridgeNode::control_loop()
         return;
     }
 
-    if (!is_target_initialized_)
-    {
-        return;
-    }
-
     std::array<float, kNumMotors> positions;
     std::array<float, kNumMotors> velocities;
     std::array<float, kNumMotors> efforts;
@@ -438,10 +460,7 @@ void MujocoMotorBridgeNode::control_loop()
         std::lock_guard<std::mutex> lock(state_mutex_);
         for (size_t step = 0; step < sim_substeps_; ++step)
         {
-            if (is_target_initialized_)
-            {
-                apply_control_locked();
-            }
+            apply_control_locked();
             mj_step(model_, data_);
         }
         update_state_from_sim_locked();
@@ -464,103 +483,126 @@ void MujocoMotorBridgeNode::control_loop()
     {
         publish_imu(stamp, orientation, gyro, accel);
     }
+
+    if (++state_publish_counter_ % state_publish_divider_ == 0)
+    {
+        publish_contract_state();
+    }
+    if (++telemetry_counter_ % telemetry_divider_ == 0)
+    {
+        publish_telemetry();
+    }
 }
 
-/**
- * @brief 处理 /rob_stride_control 服务请求。
- *        将 23 个目标位置（加零位偏移）存入 target_positions_，
- *        并返回当前关节的反馈（位置、速度、力矩、模拟温度）。
- */
-void MujocoMotorBridgeNode::on_rob_stride_control(
-    const std::shared_ptr<rs_interface::srv::RobStrideMsgs::Request> request,
-    std::shared_ptr<rs_interface::srv::RobStrideMsgs::Response> response)
+void MujocoMotorBridgeNode::on_joint_cmd(const rs_interface::msg::JointCmd::SharedPtr msg)
 {
-    std::array<float, kNumMotors> positions;
-    std::array<float, kNumMotors> velocities;
-    std::array<float, kNumMotors> efforts;
-    bool has_state = false;
+    std::lock_guard<std::mutex> lock(state_mutex_);
+    const std::string& command = msg->command;
 
+    if (command == "mit")
     {
-        std::lock_guard<std::mutex> lock(state_mutex_);
-        if (!model_ || !data_)
+        if (!enabled_)
         {
-            response->success = false;
-            response->message = "MuJoCo model not initialized";
+            RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 2000,
+                                 "mit ignored: MuJoCo bridge is not enabled");
+            return;
+        }
+        if (msg->position.size() != kNumMotors ||
+            (!msg->name.empty() && msg->name.size() != kNumMotors) ||
+            (!msg->velocity.empty() && msg->velocity.size() != kNumMotors) ||
+            (!msg->torque.empty() && msg->torque.size() != kNumMotors) ||
+            (!msg->kp.empty() && msg->kp.size() != kNumMotors) ||
+            (!msg->kd.empty() && msg->kd.size() != kNumMotors))
+        {
+            RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 2000,
+                                 "mit rejected: array sizes must be empty or %zu", kNumMotors);
             return;
         }
 
-        for (size_t i = 0; i < active_joint_count_; ++i)
+        for (size_t i = 0; i < static_cast<size_t>(kNumMotors); ++i)
         {
-            if (!joint_handles_[i].valid)
+            size_t idx = i;
+            if (!msg->name.empty())
+            {
+                const auto it = joint_name_to_index_.find(msg->name[i]);
+                if (it == joint_name_to_index_.end())
+                {
+                    RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 2000,
+                                         "mit rejected: unknown joint '%s'", msg->name[i].c_str());
+                    return;
+                }
+                idx = it->second;
+            }
+            if (idx >= active_joint_count_)
             {
                 continue;
             }
-            target_positions_[i] = request->positions[i] + zero_offsets_[i];
+
+            target_positions_[idx] = static_cast<float>(msg->position[i]);
+            target_velocities_[idx] = msg->velocity.empty()
+                                          ? 0.0f
+                                          : static_cast<float>(msg->velocity[i]);
+            target_torques_[idx] = msg->torque.empty()
+                                       ? 0.0f
+                                       : static_cast<float>(msg->torque[i]);
+            target_kps_[idx] = msg->kp.empty()
+                                   ? static_cast<float>(kp_[idx])
+                                   : static_cast<float>(msg->kp[i]);
+            target_kds_[idx] = msg->kd.empty()
+                                   ? static_cast<float>(kd_[idx])
+                                   : static_cast<float>(msg->kd[i]);
         }
-        is_target_initialized_ = true;
 
-        update_state_from_sim_locked();
-        positions = last_positions_;
-        velocities = last_velocities_;
-        efforts = last_efforts_;
-        has_state = has_state_;
+        has_mit_command_ = true;
+        damping_mode_ = false;
+        last_command_time_ = std::chrono::steady_clock::now();
+        return;
     }
 
-    for (size_t i = 0; i < kNumMotors; ++i)
+    if (command == "enable")
     {
-        response->feedback_positions[i] = positions[i];
-        response->feedback_velocities[i] = velocities[i];
-        response->feedback_torques[i] = efforts[i];
-        response->feedback_temperatures[i] = feedback_temperature_;
-    }
-
-    response->success = has_state;
-    response->message = has_state ? "Command stored" : "No simulation state available";
-}
-
-/**
- * @brief 处理 /get_positions 服务请求。返回当前各关节的位置（已减去零位偏移）。
- */
-void MujocoMotorBridgeNode::on_get_positions(
-    const std::shared_ptr<rs_interface::srv::GetPositions::Request>,
-    std::shared_ptr<rs_interface::srv::GetPositions::Response> response)
-{
-    std::array<float, kNumMotors> positions;
-    bool has_state = false;
-
-    {
-        std::lock_guard<std::mutex> lock(state_mutex_);
-        update_state_from_sim_locked();
-        positions = last_positions_;
-        has_state = has_state_;
-    }
-
-    for (size_t i = 0; i < kNumMotors; ++i)
-    {
-        response->feedback_positions[i] = positions[i];
-    }
-
-    response->success = has_state;
-    response->message = has_state ? "OK" : "No simulation state available";
-}
-
-/**
- * @brief 处理 /set_zeros 服务请求。将当前关节 qpos 值记录为零位偏移，
- *        此后反馈位置 = qpos - zero_offset，使当前姿态成为"零位"。
- */
-void MujocoMotorBridgeNode::on_set_zeros(
-    const std::shared_ptr<rs_interface::srv::SetZeros::Request>,
-    std::shared_ptr<rs_interface::srv::SetZeros::Response> response)
-{
-    {
-        std::lock_guard<std::mutex> lock(state_mutex_);
-        if (!model_ || !data_)
+        for (size_t i = 0; i < active_joint_count_; ++i)
         {
-            response->success = false;
-            response->message = "MuJoCo model not initialized";
+            target_positions_[i] = last_positions_[i];
+        }
+        enabled_ = true;
+        damping_mode_ = true;
+        has_mit_command_ = false;
+        last_command_time_ = std::chrono::steady_clock::now();
+        RCLCPP_INFO(get_logger(), "Enabling MuJoCo bridge with soft hold");
+        return;
+    }
+
+    if (command == "disable" || command == "stop")
+    {
+        enabled_ = false;
+        damping_mode_ = false;
+        has_mit_command_ = false;
+        RCLCPP_INFO(get_logger(), "MuJoCo bridge disabled");
+        return;
+    }
+
+    if (command == "damp")
+    {
+        if (!enabled_)
+        {
+            RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 2000,
+                                 "damp ignored: MuJoCo bridge is not enabled");
             return;
         }
+        damping_mode_ = true;
+        has_mit_command_ = false;
+        last_command_time_ = std::chrono::steady_clock::now();
+        return;
+    }
 
+    if (command == "set_zero")
+    {
+        if (!model_ || !data_)
+        {
+            RCLCPP_WARN(get_logger(), "set_zero ignored: MuJoCo model not initialized");
+            return;
+        }
         for (size_t i = 0; i < active_joint_count_; ++i)
         {
             if (!joint_handles_[i].valid)
@@ -568,12 +610,88 @@ void MujocoMotorBridgeNode::on_set_zeros(
                 continue;
             }
             zero_offsets_[i] = static_cast<float>(data_->qpos[joint_handles_[i].qpos_adr]);
+            target_positions_[i] = 0.0f;
         }
         update_state_from_sim_locked();
+        RCLCPP_INFO(get_logger(), "Zero offsets captured from current MuJoCo positions");
+        return;
     }
 
-    response->success = true;
-    response->message = "Zero offsets captured from current joint positions";
+    if (command == "status")
+    {
+        RCLCPP_INFO(get_logger(),
+                    "status: enabled=%d damping=%d stale=%d has_mit=%d",
+                    static_cast<int>(enabled_), static_cast<int>(damping_mode_),
+                    static_cast<int>(command_stale_), static_cast<int>(has_mit_command_));
+        return;
+    }
+
+    RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 2000,
+                         "unknown /joint_cmd command: '%s'", command.c_str());
+}
+
+void MujocoMotorBridgeNode::publish_contract_state()
+{
+    rs_interface::msg::JointState msg;
+    msg.stamp = now();
+    msg.name.assign(joint_names_.begin(), joint_names_.end());
+    msg.position.resize(kNumMotors, 0.0);
+    msg.velocity.resize(kNumMotors, 0.0);
+    msg.torque.resize(kNumMotors, 0.0);
+    msg.temperature.resize(kNumMotors, 0.0);
+    msg.valid.resize(kNumMotors, false);
+
+    {
+        std::lock_guard<std::mutex> lock(state_mutex_);
+        for (size_t i = 0; i < kNumMotors; ++i)
+        {
+            msg.temperature[i] = feedback_temperature_;
+            msg.valid[i] = has_state_;
+            if (i < active_joint_count_)
+            {
+                msg.position[i] = last_positions_[i];
+                msg.velocity[i] = last_velocities_[i];
+                msg.torque[i] = last_efforts_[i];
+            }
+        }
+    }
+
+    contract_state_pub_->publish(msg);
+}
+
+void MujocoMotorBridgeNode::publish_telemetry()
+{
+    rs_interface::msg::MotorTelemetry msg;
+    msg.stamp = now();
+    msg.name.assign(joint_names_.begin(), joint_names_.end());
+    msg.error_code.assign(kNumMotors, 0);
+    msg.feedback_age_ms.assign(kNumMotors, 0.0);
+    msg.online.assign(kNumMotors, false);
+
+    {
+        std::lock_guard<std::mutex> lock(state_mutex_);
+        msg.command_stale = command_stale_;
+        msg.safety_state = safety_state_string();
+        for (size_t i = 0; i < kNumMotors; ++i)
+        {
+            msg.online[i] = has_state_;
+        }
+    }
+
+    telemetry_pub_->publish(msg);
+}
+
+const char* MujocoMotorBridgeNode::safety_state_string() const
+{
+    if (!enabled_)
+    {
+        return "disabled";
+    }
+    if (damping_mode_ || command_stale_ || !has_mit_command_)
+    {
+        return "damping";
+    }
+    return "active";
 }
 
 /**
@@ -592,7 +710,7 @@ void MujocoMotorBridgeNode::publish_joint_states(
     sensor_msgs::msg::JointState msg;
     msg.header.stamp = stamp;
     msg.header.frame_id = base_frame_;
-    msg.name = joint_names_;
+    msg.name.assign(joint_names_.begin(), joint_names_.begin() + active_joint_count_);
     msg.position.resize(active_joint_count_);
     msg.velocity.resize(active_joint_count_);
     msg.effort.resize(active_joint_count_);
@@ -683,7 +801,7 @@ void MujocoMotorBridgeNode::publish_clock(const rclcpp::Time &stamp)
  * @note 调用方需持有 state_mutex_ 锁。
  * @return rclcpp::Time 格式的仿真时间
  */
-rclcpp::Time MujocoMotorBridgeNode::current_sim_time_locked() const
+rclcpp::Time MujocoMotorBridgeNode::current_sim_time_locked()
 {
     if (!data_)
     {
@@ -713,18 +831,16 @@ void MujocoMotorBridgeNode::reset_simulation()
         mj_forward(model_, data_);
 
         zero_offsets_.fill(0.0f);
-        is_target_initialized_ = false;
+        enabled_ = false;
+        damping_mode_ = false;
+        has_mit_command_ = false;
+        command_stale_ = false;
 
         for (size_t i = 0; i < kNumMotors; ++i)
         {
-            if (i < active_joint_count_ && joint_handles_[i].valid)
-            {
-                target_positions_[i] = static_cast<float>(data_->qpos[joint_handles_[i].qpos_adr]);
-            }
-            else
-            {
-                target_positions_[i] = 0.0f;
-            }
+            target_positions_[i] = 0.0f;
+            target_velocities_[i] = 0.0f;
+            target_torques_[i] = 0.0f;
         }
 
         update_state_from_sim_locked();

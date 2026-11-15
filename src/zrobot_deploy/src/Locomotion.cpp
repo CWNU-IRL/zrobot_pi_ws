@@ -6,6 +6,25 @@
 #include <stdexcept>
 #include <vector>
 
+namespace {
+template <typename T>
+T getOrDeclareParameter(const std::shared_ptr<rclcpp::Node>& node,
+                        const std::string& name,
+                        const T& default_value)
+{
+    if (node->has_parameter(name))
+    {
+        T value{};
+        if (node->get_parameter(name, value))
+        {
+            return value;
+        }
+        return default_value;
+    }
+    return node->declare_parameter<T>(name, default_value);
+}
+} // namespace
+
 Locomotion::Locomotion(std::shared_ptr<rclcpp::Node> node)
     : FSM(node),
       ort_env_(nullptr),
@@ -59,18 +78,18 @@ void Locomotion::initialize()
 
     // 订阅 IMU 和遥控命令
     imu_sub_ = node_->create_subscription<sensor_msgs::msg::Imu>(
-        node_->declare_parameter<std::string>("imu_topic", "/imu/data"),
+        getOrDeclareParameter<std::string>(node_, "imu_topic", "/imu/data"),
         rclcpp::SensorDataQoS(),
         std::bind(&Locomotion::imuCallback, this, std::placeholders::_1));
 
     cmd_sub_ = node_->create_subscription<geometry_msgs::msg::Twist>(
-        node_->declare_parameter<std::string>("cmd_topic", "cmd_vel"),
+        getOrDeclareParameter<std::string>(node_, "cmd_topic", "cmd_vel"),
         10,
         std::bind(&Locomotion::cmdCallback, this, std::placeholders::_1));
 
     // 加载 ONNX 模型
-    const auto model_path = node_->declare_parameter<std::string>(
-        "onnx_model_path", std::string(POLICY_DIR) + "/policy.onnx");
+    const auto model_path = getOrDeclareParameter<std::string>(
+        node_, "onnx_model_path", std::string(POLICY_DIR) + "/policy.onnx");
     loadPolicy(model_path);
 
     if (!model_ready_)
@@ -82,6 +101,7 @@ void Locomotion::initialize()
     // 启动推理线程
     counter_ = 0;
     init_time_ = std::chrono::steady_clock::now();
+    inference_gate_ = false;
     thread_running_ = true;
     inference_thread_ = std::thread(&Locomotion::inferenceLoop, this);
 
@@ -140,6 +160,17 @@ void Locomotion::run()
         }
         return;
     }
+
+    if (!stateFresh() || !activeJointsValid())
+    {
+        inference_gate_ = false;
+        RCLCPP_ERROR_THROTTLE(
+            node_->get_logger(), *node_->get_clock(), 1000,
+            "Locomotion: /joint_state stale or invalid, pausing inference and damping");
+        sendDampCommand();
+        return;
+    }
+    inference_gate_ = true;
 
     // 读取推理输出
     {   // 使用lock_guard的互斥锁，lock 对象离开作用域时自动解锁
@@ -259,29 +290,31 @@ void Locomotion::loadPolicy(const std::string &model_path)
 
 void Locomotion::initializeParameters()
 {
-    dt_ = node_->declare_parameter<double>("control_dt", 0.01);
-    phase_period_ = node_->declare_parameter<double>("phase_period", 0.64);
-    frame_stack_ = node_->declare_parameter<int>("frame_stack", 15);
-    model_obs_dim_ = node_->declare_parameter<int>("model_obs_dim", NUM_SINGLE_OBS * frame_stack_);
+    dt_ = getOrDeclareParameter<double>(node_, "control_dt", 0.01);
+    phase_period_ = getOrDeclareParameter<double>(node_, "phase_period", 0.64);
+    frame_stack_ = getOrDeclareParameter<int>(node_, "frame_stack", 15);
+    model_obs_dim_ = getOrDeclareParameter<int>(node_, "model_obs_dim", NUM_SINGLE_OBS * frame_stack_);
 
-    action_scale_ = static_cast<float>(node_->declare_parameter<double>("action_scale", 0.25));
-    obs_clip_ = static_cast<float>(node_->declare_parameter<double>("clip_observations", 18.0));
-    act_clip_ = static_cast<float>(node_->declare_parameter<double>("clip_actions", 18.0));
+    action_scale_ = static_cast<float>(getOrDeclareParameter<double>(node_, "action_scale", 0.25));
+    obs_clip_ = static_cast<float>(getOrDeclareParameter<double>(node_, "clip_observations", 18.0));
+    act_clip_ = static_cast<float>(getOrDeclareParameter<double>(node_, "clip_actions", 18.0));
 
-    obs_scale_lin_vel_ = static_cast<float>(node_->declare_parameter<double>("obs_scale_lin_vel", 2.0));
-    obs_scale_ang_vel_ = static_cast<float>(node_->declare_parameter<double>("obs_scale_ang_vel", 1.0));
-    obs_scale_dof_pos_ = static_cast<float>(node_->declare_parameter<double>("obs_scale_dof_pos", 1.0));
-    obs_scale_dof_vel_ = static_cast<float>(node_->declare_parameter<double>("obs_scale_dof_vel", 0.05));
+    obs_scale_lin_vel_ = static_cast<float>(getOrDeclareParameter<double>(node_, "obs_scale_lin_vel", 2.0));
+    obs_scale_ang_vel_ = static_cast<float>(getOrDeclareParameter<double>(node_, "obs_scale_ang_vel", 1.0));
+    obs_scale_dof_pos_ = static_cast<float>(getOrDeclareParameter<double>(node_, "obs_scale_dof_pos", 1.0));
+    obs_scale_dof_vel_ = static_cast<float>(getOrDeclareParameter<double>(node_, "obs_scale_dof_vel", 0.05));
 
-    startup_hold_seconds_ = node_->declare_parameter<double>("startup_hold_seconds", 3.0);
-    require_imu_before_locomotion_ = node_->declare_parameter<bool>("require_imu_before_locomotion", true);
+    startup_hold_seconds_ = getOrDeclareParameter<double>(node_, "startup_hold_seconds", 3.0);
+    require_imu_before_locomotion_ = getOrDeclareParameter<bool>(node_, "require_imu_before_locomotion", true);
+    cmd_vel_timeout_ms_ = static_cast<double>(
+        getOrDeclareParameter<int>(node_, "cmd_vel_timeout_ms", 300));
 
-    auto default_pose_param = node_->declare_parameter<std::vector<double>>(
-        "default_pose", std::vector<double>{
+    auto default_pose_param = getOrDeclareParameter<std::vector<double>>(
+        node_, "default_pose", std::vector<double>{
             0.0, 0.0, -0.45, -0.85, 0.4, 0.0,   // L: hip_roll, hip_yaw, hip_pitch, knee, foot_pitch, foot_roll
             0.0, 0.0, 0.45, 0.85, -0.4, 0.0});  // R: hip_roll, hip_yaw, hip_pitch, knee, foot_pitch, foot_roll
-    auto dof_indices_param = node_->declare_parameter<std::vector<int64_t>>(
-        "dof_indices", std::vector<int64_t>{0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11});
+    auto dof_indices_param = getOrDeclareParameter<std::vector<int64_t>>(
+        node_, "dof_indices", std::vector<int64_t>{0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11});
 
     if (frame_stack_ <= 0)
     {
@@ -405,6 +438,8 @@ void Locomotion::cmdCallback(const geometry_msgs::msg::Twist::SharedPtr msg)
     current_command_(0) = static_cast<float>(msg->linear.x);
     current_command_(1) = static_cast<float>(msg->linear.y);
     current_command_(2) = static_cast<float>(msg->angular.z);
+    last_cmd_time_ = std::chrono::steady_clock::now();
+    cmd_received_ = true;
 }
 
 void Locomotion::collectObservations()
@@ -419,7 +454,10 @@ void Locomotion::collectObservations()
     Eigen::Vector3f euler;
     {
         std::lock_guard<std::mutex> lock(sensor_data_mutex_);
-        command = current_command_;
+        const bool cmd_fresh = cmd_received_ &&
+            (std::chrono::steady_clock::now() - last_cmd_time_) <=
+                std::chrono::duration<double, std::milli>(cmd_vel_timeout_ms_);
+        command = cmd_fresh ? current_command_ : Eigen::Vector3f::Zero();
         omega = current_angular_velocity_;
         euler = current_euler_;
     }
@@ -552,6 +590,12 @@ void Locomotion::inferenceLoop()
     while (thread_running_)
     {
         auto start = Clock::now();
+
+        if (!inference_gate_)
+        {
+            std::this_thread::sleep_until(start + std::chrono::duration<double>(dt_));
+            continue;
+        }
 
         ++counter_;
         collectObservations(); // 收集观测数据

@@ -3,10 +3,14 @@
 #include <atomic>
 #include <iostream>
 #include <cstring>
+#include <cstdio>
+#include <cerrno>
 #include <cmath>
 #include <linux/can.h>
 #include <linux/can/raw.h>
 #include <net/if.h>
+#include <poll.h>
+#include <fcntl.h>
 #include <sys/ioctl.h>
 #include <sys/socket.h>
 #include <unistd.h>
@@ -14,6 +18,8 @@
 #include <chrono>
 #include <ctime>
 #include <optional>
+#include <tuple>
+#include <string>
 #include <vector>
 #include <map>
 #include <bitset>
@@ -179,75 +185,19 @@ public:
             close(socket_fd);
     }
 
-    ReceiveResult receive(double timeout_sec = 0)
-    {
-        // 设置超时时间
-        if (timeout_sec > 0)
-        {
-            struct timeval timeout;
-            timeout.tv_sec = static_cast<int>(timeout_sec);
-            timeout.tv_usec = static_cast<int>((timeout_sec - timeout.tv_sec) * 1e6);
-            setsockopt(socket_fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
-        }
-
-        struct can_frame frame;
-        std::memset(&frame, 0, sizeof(frame));
-
-        ssize_t nbytes = recv(socket_fd, &frame, sizeof(struct can_frame), 0);
-
-        if (nbytes <= 0)
-        {
-            return std::nullopt; // 超时或失败
-        }
-
-        // 检查是否是扩展帧
-        if (!(frame.can_id & CAN_EFF_FLAG))
-        {
-            throw std::runtime_error("Frame is not extended ID");
-        }
-
-        uint32_t can_id = frame.can_id & CAN_EFF_MASK;
-
-        uint8_t communication_type = (can_id >> 24) & 0x1F;
-        uint16_t extra_data = (can_id >> 8) & 0xFFFF;
-        uint8_t host_id = can_id & 0xFF;
-
-        error_code = uint8_t((can_id >> 16) & 0x3F);
-        pattern = uint8_t((can_id >> 22) & 0x03);
-
-        // std::cout << "canid bits = " << std::bitset<32>(can_id) << std::endl;
-        // std::cout << "data bits = ";
-        // for (int i = 7; i >= 0; --i) { // 从高字节到低字节打印
-        //     std::cout << std::bitset<8>(frame.data[i]) << " ";
-        // }
-        std::cout << "canid = 0x" << std::hex << std::uppercase << can_id << std::dec << std::endl;
-
-        // std::cout << "data = ";
-        for (int i = 0; i < 8; ++i)
-        {
-            std::cout << "data[" << i << "] = 0x"
-                << std::setw(2) << std::setfill('0')
-                << std::hex << std::uppercase
-                << static_cast<int>(frame.data[i]) << "  ";
-        }
-        std::cout << std::dec << std::endl; // 恢复为十进制输出
-
-        std::vector<uint8_t> data(frame.data, frame.data + frame.can_dlc);
-
-        return std::make_tuple(communication_type, extra_data, host_id, data);
-    }
+    // 等待可读并收一帧；超时/短帧/非扩展帧返回空，不抛异常。
+    ReceiveResult receive(double timeout_sec = 0);
 
     std::tuple<float, float, float, float> return_data_pvtt()
     {
-        std::cout << "-----position_feedback: " << position_ << std::endl;
-        std::cout << "-----velocity_feedback: " << velocity_ << std::endl;
-        std::cout << "-----torque: " << torque_ << std::endl;
-        std::cout << "-----temperature: " << temperature_ << std::endl;
-
         return std::make_tuple(position_, velocity_, torque_, temperature_);
     }
 
-    void receive_status_frame();
+    // 收一帧并解析；收到任何有效帧（含参数回帧）返回 true。
+    bool receive_status_frame(int timeout_ms = 5);
+
+    // 供 tick 使用：只有收到 MotorRequest 反馈帧并刷新位置/速度/力矩/温度才返回 true。
+    bool poll_status(int timeout_ms);
 
     void Set_RobStrite_Motor_parameter(uint16_t Index, float Value, char Value_mode);
 
@@ -262,11 +212,13 @@ public:
 
     uint16_t float_to_uint(float x, float x_min, float x_max, int bits);
     // 发送运控模式（控制角度 + 速度 + KP + KD）
+    // wait_for_reply=false 时只写不等，供稳态 tick 使用。
     std::tuple<float, float, float, float> send_motion_command(float torque,
                                                                float position_rad,
                                                                float velocity_rad_s,
                                                                float kp = 0.5f,
-                                                               float kd = 0.1f);
+                                                               float kd = 0.1f,
+                                                               bool wait_for_reply = true);
 
     float uint_to_float(uint16_t x_int, float x_min, float x_max, int bits)
     {
@@ -305,6 +257,12 @@ public:
         return data_float;
     }
 
+private:
+    ReceiveResult receive_frame(int timeout_ms);
+    bool write_frame(const can_frame& frame);
+    bool parse_status_frame(const ReceiveResult& result, bool* got_motor_request);
+    void log_error_throttled(const char* message);
+
 public:
     std::string iface;
     uint8_t master_id;
@@ -323,4 +281,14 @@ public:
     uint8_t pattern = 0;
     std::atomic<bool> is_move_control_first = true;
     int actuator_type;
+
+    int fd() const { return socket_fd; }
+    uint64_t tx_failures() const { return tx_failures_; }
+    uint64_t feedback_count() const { return feedback_count_; }
+
+private:
+    uint64_t tx_failures_ = 0;
+    uint64_t feedback_count_ = 0;
+    std::chrono::steady_clock::time_point last_error_log_{};
+    std::chrono::steady_clock::time_point last_mode_log_{};
 };

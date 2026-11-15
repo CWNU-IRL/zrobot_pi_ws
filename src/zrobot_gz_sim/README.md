@@ -2,7 +2,7 @@
 
 ## 概述
 
-ZRobot 的 Gazebo 仿真桥接包。实现 `rs_interface` 的三个服务接口，连接 Gazebo 仿真环境中通过 `ros2_control` 和 `joint_group_effort_controller` 控制的机器人模型。在 200 Hz 控制循环中通过 PD 公式将位置目标转换为力矩指令，输出到仿真关节。
+ZRobot 的 Gazebo 仿真桥接包。实现与实机相同的 `/joint_cmd` → `/joint_state` 契约，连接 Gazebo 仿真环境中通过 `ros2_control` 和 `joint_group_effort_controller` 控制的机器人模型。在 200 Hz 控制循环中通过 PD 公式将位置目标转换为力矩指令，输出到仿真关节。
 
 包含完整的 URDF 机器人模型（含 12 个驱动关节、24 个 STL 碰撞 / 视觉网格）和 Gazebo 启动配置。
 
@@ -11,7 +11,7 @@ ZRobot 的 Gazebo 仿真桥接包。实现 `rs_interface` 的三个服务接口�
 ### ROS 2
 
 - `rclcpp`
-- `rs_interface`（自定义服务接口）
+- `rs_interface`（命令流/状态消息）
 - `sensor_msgs`
 - `std_msgs`
 - `controller_manager`
@@ -61,25 +61,22 @@ ros2 run zrobot_deploy main
 
 ## ROS 2 接口
 
-### 提供的服务
-
-| 服务名                | 服务类型                         | 说明                                    |
-| --------------------- | -------------------------------- | --------------------------------------- |
-| `/rob_stride_control` | `rs_interface/srv/RobStrideMsgs` | 接收位置目标，PD 计算力矩发送到仿真关节 |
-| `/get_positions`      | `rs_interface/srv/GetPositions`  | 读取仿真关节当前位置                    |
-| `/set_zeros`          | `rs_interface/srv/SetZeros`      | 当前仿真位置归零校准                    |
-
 ### 订阅的话题
 
-| 话题名          | 类型                         | 说明                            |
-| --------------- | ---------------------------- | ------------------------------- |
-| `/joint_states` | `sensor_msgs/msg/JointState` | Gazebo 发布的关节状态（200 Hz） |
+| 话题名          | 类型                             | 说明 |
+| --------------- | -------------------------------- | ---- |
+| `/joint_cmd`    | `rs_interface/msg/JointCmd`      | 与实机相同的命令流（reliable / depth 1） |
+| `/joint_states` | `sensor_msgs/msg/JointState`     | Gazebo 发布的 12 个关节状态（200 Hz） |
 
 ### 发布的话题
 
-| 话题名                                    | 类型                             | 说明                         |
-| ----------------------------------------- | -------------------------------- | ---------------------------- |
-| `/joint_group_effort_controller/commands` | `std_msgs/msg/Float64MultiArray` | PD 计算后的力矩指令（12 维） |
+| 话题名                                    | 类型                                 | 说明 |
+| ----------------------------------------- | ------------------------------------ | ---- |
+| `/joint_state`                            | `rs_interface/msg/JointState`        | 23 路统一状态契约，未接线关节补 0，`valid=true` |
+| `/motor_telemetry`                        | `rs_interface/msg/MotorTelemetry`    | 10 Hz 诊断信息 |
+| `/joint_group_effort_controller/commands` | `std_msgs/msg/Float64MultiArray`     | PD 计算后的力矩指令（12 维） |
+
+`enable/disable/stop/damp/set_zero` 语义与实机 bridge 一致；命令超过 `command_timeout_ms` 后自动进入阻尼。
 
 ## 项目结构
 
@@ -113,12 +110,17 @@ zrobot_gz_sim/
 
 ### bridge_params.yaml
 
-| 参数                   | 类型       | 默认值        | 说明                 |
-| ---------------------- | ---------- | ------------- | -------------------- |
-| `joint_names`          | string[12] | 12 个腿部关节 | 受控关节列表         |
-| `kp`                   | double[12] | 见 YAML       | 12 个关节的 PD Kp 值 |
-| `kd`                   | double[12] | 见 YAML       | 12 个关节的 PD Kd 值 |
+| 参数                   | 类型       | 默认值        | 说明 |
+| ---------------------- | ---------- | ------------- | ---- |
+| `joint_names`          | string[23] | 23 个统一名称 | 权威 0..22 顺序 |
+| `active_joint_count`   | int        | 12            | 实际接入 Gazebo 的关节数 |
+| `kp`                   | double[23] | 见 YAML       | PD Kp 值（不足补默认） |
+| `kd`                   | double[23] | 见 YAML       | PD Kd 值 |
 | `feedback_temperature` | float      | 35.0          | 仿真反馈温度（常量） |
+| `command_timeout_ms`   | int        | 300           | 命令超时后进入阻尼 |
+| `damping_kd`           | double     | 1.0           | 阻尼 Kd |
+| `state_publish_hz`     | double     | 100.0         | `/joint_state` 发布频率 |
+| `telemetry_hz`         | double     | 10.0          | `/motor_telemetry` 发布频率 |
 
 ### controllers.yaml
 
