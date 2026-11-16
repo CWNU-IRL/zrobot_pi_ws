@@ -6,3 +6,6 @@ log
 *cmake-build*
 .cache
 # third_party
+# Local training and simulation data
+/chen_humanoid_gym-main/
+/*.csv
