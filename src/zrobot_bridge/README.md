@@ -2,7 +2,7 @@
 
 ## 概述
 
-实机 RobStride 电机 CAN 总线桥接节点。通过 4 路 CAN 接口（can10 ~ can13）与 23 个 RobStride 系列电机通信，实现位置控制、速度控制、电流控制、参数读写、零点校准等功能。提供 `rs_interface` 定义的三个 ROS 2 服务，是 `zrobot_deploy` 在实机部署时的底层电机驱动。
+实机 RobStride 电机 CAN 总线桥接节点。通过多路 CAN 接口与 23 个 RobStride 系列电机通信，实现运控模式位置控制、使能/失能、零点校准等功能。节点以 100 Hz tick 订阅 `/joint_cmd` 并发布 `/joint_state`、`/motor_telemetry`，是 `zrobot_deploy` 在实机部署时的底层驱动。
 
 ## 依赖
 
@@ -14,7 +14,7 @@
 ### ROS 2
 
 - `rclcpp`
-- `rs_interface`（自定义服务接口）
+- `rs_interface`（命令流/状态消息与 SetZeros 服务）
 
 ## 构建
 
@@ -27,7 +27,7 @@ colcon build --packages-select rs_interface zrobot_bridge
 ### 1. 配置 CAN 接口
 
 ```bash
-# 使用脚本自动配置 4 路 CAN（can10 ~ can13），波特率 1 Mbps
+# 使用脚本自动配置 4 路 CAN（can0 ~ can3）
 sudo bash src/zrobot_bridge/scripts/setup_can_interfaces.sh
 ```
 
@@ -56,25 +56,55 @@ ros2 launch zrobot_bridge motor_controller.launch.py \
 | `motor_can_interfaces` | string[23] | 23 个电机所属的 CAN 接口名称 |
 | `motor_kps`            | float[23]  | 23 个电机的 Kp 参数          |
 | `motor_kds`            | float[23]  | 23 个电机的 Kd 参数          |
+| `joint_names`          | string[23] | 权威关节顺序（0..22）        |
+| `live`                 | bool       | false 时不打开 CAN，仅回显命令状态 |
+| `control_frequency_hz` | double     | tick 频率，默认 100          |
+| `command_timeout_ms`   | int        | 命令超时后进入阻尼，默认 300 |
+| `feedback_timeout_ms`  | int        | `valid[]` 判定阈值，默认 100 |
+| `damping_kd`           | double     | 阻尼/软保持使用的 Kd         |
+| `auto_disable_after_ms`| int        | >0 时无命令自动失能，0 关闭  |
 
 ### CAN 接口分布
 
 | CAN 接口 | 电机索引 | 电机数量 |
 | -------- | -------- | -------- |
-| can10    | 0-5      | 6        |
-| can11    | 6-12     | 7        |
-| can12    | 13-16    | 4        |
-| can13    | 17-22    | 6        |
+| can0     | 0-5      | 6        |
+| can1     | 6-12     | 7        |
+| can2     | 13-16    | 4        |
+| can3     | 17-22    | 6        |
 
 ## ROS 2 接口
 
-### 提供的服务
+### 订阅
 
-| 服务名                | 服务类型                         | 说明                                 |
-| --------------------- | -------------------------------- | ------------------------------------ |
-| `/rob_stride_control` | `rs_interface/srv/RobStrideMsgs` | 发送 23 个电机位置指令，返回反馈数据 |
-| `/get_positions`      | `rs_interface/srv/GetPositions`  | 读取 23 个电机的当前位置             |
-| `/set_zeros`          | `rs_interface/srv/SetZeros`      | 将当前位置校准为机械零位             |
+| Topic        | 类型                         | QoS               | 说明 |
+| ------------ | ---------------------------- | ----------------- | ---- |
+| `/joint_cmd` | `rs_interface/msg/JointCmd`  | reliable, depth 1 | `mit/enable/disable/stop/damp/set_zero/status` |
+
+### 发布
+
+| Topic              | 类型                             | QoS               | 说明 |
+| ------------------ | -------------------------------- | ----------------- | ---- |
+| `/joint_state`     | `rs_interface/msg/JointState`    | best effort, depth 1 | 23 路位置/速度/力矩/温度 + `valid[]` |
+| `/motor_telemetry` | `rs_interface/msg/MotorTelemetry`| best effort, depth 1, 10 Hz | 错误码、反馈年龄、在线状态、安全状态 |
+
+### 服务
+
+| 服务名       | 服务类型                    | 说明 |
+| ------------ | --------------------------- | ---- |
+| `/set_zeros` | `rs_interface/srv/SetZeros` | 回调只入队，零点流程在维护槽执行 |
+
+### tick 与安全语义
+
+1. 命令回调只更新缓存，所有 CAN 读写都在 tick 线程完成。
+2. tick 先排空上一周期反馈，再对 23 路电机非阻塞写命令，最后用短 `poll` 收状态帧。
+3. 命令超过 `command_timeout_ms` 未更新时发送 `kp=0, kd=damping_kd` 的阻尼命令，`safety_state="damping"`。
+4. `enable/disable/set_zero` 进入维护队列；维护期间暂停电机写，状态继续发布。
+5. 单个电机失联只影响该电机的 `valid/online`，不阻塞其他电机。
+
+### 协议回归
+
+本次改造只改传输层，帧构造与解析保持逐字节不变。上实机前需用 `candump -L canX` 分别录制旧版和新版执行同一命令序列（`mit/enable/disable/set_zero` + 一次模式切换）的帧，过滤相同 CAN ID 后比较 `data[]`，字节完全一致才算通过。
 
 ## 项目结构
 

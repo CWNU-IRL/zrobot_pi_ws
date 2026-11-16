@@ -2,7 +2,7 @@
 
 ## 概述
 
-ZRobot 的 MuJoCo 仿真桥接包。实现 `rs_interface` 的三个服务接口，加载 MJCF 格式机器人模型，使用 MuJoCo 物理引擎进行实时仿真。提供两种控制模式：力矩 PD 控制（默认）和直接位置控制。包含独立的 GLUT 3D 渲染线程，支持鼠标 / 键盘交互查看。
+ZRobot 的 MuJoCo 仿真桥接包。实现与实机相同的 `/joint_cmd` → `/joint_state` 契约，加载 MJCF 格式机器人模型，使用 MuJoCo 物理引擎进行实时仿真。提供两种控制模式：力矩 PD 控制（默认）和直接位置控制。包含独立的 GLUT 3D 渲染线程，支持鼠标 / 键盘交互查看。
 
 ## 依赖
 
@@ -56,35 +56,42 @@ ros2 run zrobot_deploy main
 
 ## ROS 2 接口
 
-### 提供的服务
+### 订阅的话题
 
-| 服务名                | 服务类型                         | 说明                                  |
-| --------------------- | -------------------------------- | ------------------------------------- |
-| `/rob_stride_control` | `rs_interface/srv/RobStrideMsgs` | 接收位置目标，PD 或位置控制后返回反馈 |
-| `/get_positions`      | `rs_interface/srv/GetPositions`  | 读取仿真关节位置（减去零位偏移）      |
-| `/set_zeros`          | `rs_interface/srv/SetZeros`      | 当前仿真位置归零校准                  |
+| 话题名       | 类型                        | 说明 |
+| ------------ | --------------------------- | ---- |
+| `/joint_cmd` | `rs_interface/msg/JointCmd` | 与实机相同的命令流（reliable / depth 1） |
 
 ### 发布的话题
 
-| 话题名          | 类型                         | 频率   | 说明                                    |
-| --------------- | ---------------------------- | ------ | --------------------------------------- |
-| `/joint_states` | `sensor_msgs/msg/JointState` | 200 Hz | 关节位置、速度、力矩反馈                |
-| `/imu/data`     | `sensor_msgs/msg/Imu`        | 200 Hz | 仿真 IMU 数据（方向 / 角速度 / 加速度） |
-| `/clock`        | `rosgraph_msgs/msg/Clock`    | 200 Hz | 仿真时间                                |
+| 话题名              | 类型                                 | 频率   | 说明 |
+| ------------------- | ------------------------------------ | ------ | ---- |
+| `/joint_state`      | `rs_interface/msg/JointState`        | 100 Hz | 23 路统一契约，未接线关节补 0，`valid=true` |
+| `/motor_telemetry`  | `rs_interface/msg/MotorTelemetry`    | 10 Hz  | 诊断信息 |
+| `/joint_states`     | `sensor_msgs/msg/JointState`         | 200 Hz | 12 个活动关节的位置、速度、力矩反馈 |
+| `/imu/data`         | `sensor_msgs/msg/Imu`                | 200 Hz | 仿真 IMU 数据（方向 / 角速度 / 加速度） |
+| `/clock`            | `rosgraph_msgs/msg/Clock`            | 200 Hz | 仿真时间 |
+
+`enable/disable/stop/damp/set_zero` 语义与实机 bridge 一致；命令超过 `command_timeout_ms` 后自动进入阻尼。
 
 ### 参数
 
-| 参数名                 | 类型       | 默认值        | 说明                                 |
-| ---------------------- | ---------- | ------------- | ------------------------------------ |
-| `joint_names`          | string[12] | 12 个腿部关节 | 受控关节列表                         |
-| `kp`                   | double[12] | 见 YAML       | PD Kp 值                             |
-| `kd`                   | double[12] | 见 YAML       | PD Kd 值                             |
+| 参数名                 | 类型       | 默认值        | 说明 |
+| ---------------------- | ---------- | ------------- | ---- |
+| `joint_names`          | string[23] | 23 个统一名称 | 权威 0..22 顺序 |
+| `active_joint_count`   | int        | 12            | 实际接入 MuJoCo 的关节数 |
+| `kp`                   | double[23] | 见 YAML       | PD Kp 值（不足补默认） |
+| `kd`                   | double[23] | 见 YAML       | PD Kd 值 |
 | `control_mode`         | string     | `torque_pd`   | 控制模式（`torque_pd` / `position`） |
-| `control_frequency`    | double     | 200.0         | 控制频率 (Hz)                        |
-| `feedback_temperature` | float      | 35.0          | 仿真反馈温度                         |
-| `publish_joint_states` | bool       | true          | 是否发布 `/joint_states`             |
-| `publish_imu`          | bool       | true          | 是否发布 `/imu/data`                 |
-| `publish_clock`        | bool       | true          | 是否发布 `/clock`                    |
+| `control_frequency`    | double     | 200.0         | 控制频率 (Hz) |
+| `feedback_temperature` | float      | 35.0          | 仿真反馈温度 |
+| `command_timeout_ms`   | int        | 300           | 命令超时后进入阻尼 |
+| `damping_kd`           | double     | 1.0           | 阻尼 Kd |
+| `state_publish_hz`     | double     | 100.0         | `/joint_state` 发布频率 |
+| `telemetry_hz`         | double     | 10.0          | `/motor_telemetry` 发布频率 |
+| `publish_joint_states` | bool       | true          | 是否发布 `/joint_states` |
+| `publish_imu`          | bool       | true          | 是否发布 `/imu/data` |
+| `publish_clock`        | bool       | true          | 是否发布 `/clock` |
 
 ## 项目结构
 

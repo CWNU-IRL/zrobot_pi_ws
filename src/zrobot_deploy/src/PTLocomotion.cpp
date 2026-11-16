@@ -94,6 +94,7 @@ void PTLocomotion::initialize()
 
     counter_ = 0;
     init_time_ = std::chrono::steady_clock::now();
+    inference_gate_ = false;
     thread_running_ = true;
     inference_thread_ = std::thread(&PTLocomotion::inferenceLoop, this);
 
@@ -156,6 +157,17 @@ void PTLocomotion::run()
         }
         return;
     }
+
+    if (!stateFresh() || !activeJointsValid())
+    {
+        inference_gate_ = false;
+        RCLCPP_ERROR_THROTTLE(
+            node_->get_logger(), *node_->get_clock(), 1000,
+            "PTLocomotion: /joint_state stale or invalid, pausing inference and damping");
+        sendDampCommand();
+        return;
+    }
+    inference_gate_ = true;
 
     {
         std::lock_guard<std::mutex> lock(action_mutex_);
@@ -243,6 +255,8 @@ void PTLocomotion::initializeParameters()
 
     startup_hold_seconds_ = getOrDeclareParameter<double>(node_, "startup_hold_seconds", 3.0);
     require_imu_before_locomotion_ = getOrDeclareParameter<bool>(node_, "require_imu_before_locomotion", true);
+    cmd_vel_timeout_ms_ = static_cast<double>(
+        getOrDeclareParameter<int>(node_, "cmd_vel_timeout_ms", 300));
 
     auto default_pose_param = getOrDeclareParameter<std::vector<double>>(
         node_, "default_pose", std::vector<double>{
@@ -366,6 +380,8 @@ void PTLocomotion::cmdCallback(const geometry_msgs::msg::Twist::SharedPtr msg)
     current_command_(0) = static_cast<float>(msg->linear.x);
     current_command_(1) = static_cast<float>(msg->linear.y);
     current_command_(2) = static_cast<float>(msg->angular.z);
+    last_cmd_time_ = std::chrono::steady_clock::now();
+    cmd_received_ = true;
 }
 
 void PTLocomotion::collectObservations()
@@ -380,7 +396,10 @@ void PTLocomotion::collectObservations()
     Eigen::Vector3f euler;
     {
         std::lock_guard<std::mutex> lock(sensor_data_mutex_);
-        command = current_command_;
+        const bool cmd_fresh = cmd_received_ &&
+            (std::chrono::steady_clock::now() - last_cmd_time_) <=
+                std::chrono::duration<double, std::milli>(cmd_vel_timeout_ms_);
+        command = cmd_fresh ? current_command_ : Eigen::Vector3f::Zero();
         omega = current_angular_velocity_;
         euler = current_euler_;
     }
@@ -499,6 +518,12 @@ void PTLocomotion::inferenceLoop()
     while (thread_running_)
     {
         auto start = Clock::now();
+
+        if (!inference_gate_)
+        {
+            std::this_thread::sleep_until(start + std::chrono::duration<double>(dt_));
+            continue;
+        }
 
         ++counter_;
         collectObservations();

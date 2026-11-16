@@ -4,7 +4,9 @@
 #include "zrobot_deploy/PTLocomotion.h"
 #include "zrobot_deploy/Damping.h"
 #include <rclcpp/rclcpp.hpp>
+#include <chrono>
 #include <memory>
+#include <thread>
 #include <termios.h>
 #include <unistd.h>
 #include <fcntl.h>
@@ -63,7 +65,7 @@ void printMenu()
     std::cout << "  [F] - 启动 FixStand 状态机 (移动到机械零位)\n";
     std::cout << "  [L] - 启动 Locomotion 状态机\n";
     std::cout << "  [T] - 启动 PTLocomotion 状态机 (.pt 推理)\n";
-    std::cout << "  [D] - 启动 Damping 状态机 (仿真阻尼模式)\n";
+    std::cout << "  [D] - 启动 Damping 状态机 (驱动阻尼)\n";
     std::cout << "  [S] - 停止当前状态机\n";
     std::cout << "  [Q] - 退出程序\n";
     std::cout << "========================================\n\n";
@@ -78,7 +80,12 @@ int main(int argc, char** argv)
     auto node = std::make_shared<rclcpp::Node>("zrobot_fsm_controller");
     
     RCLCPP_INFO(node->get_logger(), "ZRobot FSM Controller started");
-    
+
+    // 独立 executor 线程处理 /joint_state 等回调；主线程只跑状态机。
+    rclcpp::executors::SingleThreadedExecutor executor;
+    executor.add_node(node);
+    std::thread executor_thread([&executor]() { executor.spin(); });
+
     // 当前运行的状态机
     std::shared_ptr<FSM> current_fsm = nullptr;
     
@@ -197,8 +204,10 @@ int main(int argc, char** argv)
                 case 'Q':
                 {
                     // 退出程序
-                    RCLCPP_INFO(node->get_logger(), "Exiting program...");
+                    RCLCPP_INFO(node->get_logger(), "Exiting program, sending damp command...");
                     if (current_fsm) {
+                        current_fsm->sendDampCommand();
+                        std::this_thread::sleep_for(std::chrono::milliseconds(50));
                         current_fsm->exit();
                         current_fsm.reset();
                     }
@@ -217,14 +226,16 @@ int main(int argc, char** argv)
             current_fsm->run();
         }
         
-        // 处理 ROS 回调（非阻塞）
-        rclcpp::spin_some(node);
-        
         // 控制循环频率，根据循环实际耗时自动计算休眠时间
         rate.sleep();
     }
     
     RCLCPP_INFO(node->get_logger(), "ZRobot FSM Controller stopped");
+
+    executor.cancel();
+    if (executor_thread.joinable()) {
+        executor_thread.join();
+    }
     
     // 关闭ROS2
     rclcpp::shutdown();

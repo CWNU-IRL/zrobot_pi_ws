@@ -3,11 +3,14 @@
 
 #include <array>
 #include <atomic>
+#include <chrono>
 #include <cstddef>
+#include <cstdint>
 #include <memory>
 #include <mutex>
 #include <string>
 #include <thread>
+#include <unordered_map>
 #include <vector>
 
 #include "rclcpp/rclcpp.hpp"
@@ -15,9 +18,9 @@
 #include "sensor_msgs/msg/imu.hpp"
 #include "sensor_msgs/msg/joint_state.hpp"
 
-#include "rs_interface/srv/get_positions.hpp"
-#include "rs_interface/srv/rob_stride_msgs.hpp"
-#include "rs_interface/srv/set_zeros.hpp"
+#include "rs_interface/msg/joint_cmd.hpp"
+#include "rs_interface/msg/joint_state.hpp"
+#include "rs_interface/msg/motor_telemetry.hpp"
 
 #include <mujoco/mujoco.h>
 
@@ -69,17 +72,13 @@ private:
         double kp,
         double kd) const;
 
-    void on_rob_stride_control(
-        const std::shared_ptr<rs_interface::srv::RobStrideMsgs::Request> request,
-        std::shared_ptr<rs_interface::srv::RobStrideMsgs::Response> response);
+    void on_joint_cmd(const rs_interface::msg::JointCmd::SharedPtr msg);
 
-    void on_get_positions(
-        const std::shared_ptr<rs_interface::srv::GetPositions::Request> request,
-        std::shared_ptr<rs_interface::srv::GetPositions::Response> response);
+    void publish_contract_state();
 
-    void on_set_zeros(
-        const std::shared_ptr<rs_interface::srv::SetZeros::Request> request,
-        std::shared_ptr<rs_interface::srv::SetZeros::Response> response);
+    void publish_telemetry();
+
+    const char* safety_state_string() const;
 
     void publish_joint_states(
         const rclcpp::Time &stamp,
@@ -95,7 +94,7 @@ private:
 
     void publish_clock(const rclcpp::Time &stamp);
 
-    rclcpp::Time current_sim_time_locked() const;
+    rclcpp::Time current_sim_time_locked();
     SensorHandle find_sensor_handle(const std::string &name) const;
 
     void start_render_thread();
@@ -112,15 +111,15 @@ private:
     mjtMouse map_button_to_action(int button, int state) const;
 
     rclcpp::Publisher<sensor_msgs::msg::JointState>::SharedPtr joint_state_pub_;
+    rclcpp::Publisher<rs_interface::msg::JointState>::SharedPtr contract_state_pub_;
+    rclcpp::Publisher<rs_interface::msg::MotorTelemetry>::SharedPtr telemetry_pub_;
     rclcpp::Publisher<sensor_msgs::msg::Imu>::SharedPtr imu_pub_;
     rclcpp::Publisher<rosgraph_msgs::msg::Clock>::SharedPtr clock_pub_;
+    rclcpp::Subscription<rs_interface::msg::JointCmd>::SharedPtr joint_cmd_sub_;
     rclcpp::TimerBase::SharedPtr control_timer_;
 
-    rclcpp::Service<rs_interface::srv::RobStrideMsgs>::SharedPtr rob_stride_service_;
-    rclcpp::Service<rs_interface::srv::GetPositions>::SharedPtr get_positions_service_;
-    rclcpp::Service<rs_interface::srv::SetZeros>::SharedPtr set_zeros_service_;
-
     std::vector<std::string> joint_names_;
+    std::unordered_map<std::string, size_t> joint_name_to_index_;
     size_t active_joint_count_;
     std::vector<double> kp_;
     std::vector<double> kd_;
@@ -140,7 +139,21 @@ private:
     bool publish_imu_;
     bool publish_clock_;
     bool has_state_;
-    bool is_target_initialized_;
+
+    // /joint_cmd 命令缓存（位置为相对零位）
+    bool enabled_;
+    bool damping_mode_;
+    bool has_mit_command_;
+    bool command_stale_;
+    std::chrono::steady_clock::time_point last_command_time_;
+    double command_timeout_ms_;
+    double damping_kd_;
+    double state_publish_hz_;
+    uint64_t state_publish_divider_;
+    uint64_t state_publish_counter_;
+    double telemetry_hz_;
+    uint64_t telemetry_divider_;
+    uint64_t telemetry_counter_;
 
     ControlMode control_mode_;
     std::string control_mode_param_;
@@ -152,7 +165,11 @@ private:
     std::array<float, kNumMotors> last_positions_;
     std::array<float, kNumMotors> last_velocities_;
     std::array<float, kNumMotors> last_efforts_;
-    std::array<float, kNumMotors> target_positions_;
+    std::array<float, kNumMotors> target_positions_{};
+    std::array<float, kNumMotors> target_velocities_{};
+    std::array<float, kNumMotors> target_torques_{};
+    std::array<float, kNumMotors> target_kps_{};
+    std::array<float, kNumMotors> target_kds_{};
 
     std::thread render_thread_;
     std::atomic<bool> render_running_{false};

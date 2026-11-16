@@ -3,10 +3,7 @@
 
 #include "zrobot_deploy/FSM.h"
 
-#include <array>
-
-// Damping 状态机
-// 通过位置命令近似阻尼：q_cmd = q_fb - k_d * dq_fb
+// Damping 状态机：向 bridge 发布 damp 命令，由驱动使用自身反馈做阻尼。
 class Damping : public FSM
 {
 public:
@@ -18,17 +15,7 @@ public:
     void exit() override;
 
 private:
-    void loadParameters();
-
     bool is_initialized_;
-    bool feedback_seeded_;
-
-    float kd_default_;
-    float velocity_deadband_;
-    float max_position_delta_;
-
-    std::array<float, 23> damping_gains_;
-    std::array<float, 23> command_positions_;
 };
 
 #endif // ZROBOT_DEPLOY_DAMPING_H

@@ -47,10 +47,14 @@ private:
     Eigen::Vector3f current_angular_velocity_;
     Eigen::Vector3f current_euler_;
     Eigen::Vector3f current_command_;
+    bool cmd_received_ = false;
+    std::chrono::steady_clock::time_point last_cmd_time_;
+    double cmd_vel_timeout_ms_ = 300.0;
     std::mutex sensor_data_mutex_;
 
     std::thread inference_thread_;
     std::atomic<bool> thread_running_;
+    std::atomic<bool> inference_gate_{false};
     std::mutex action_mutex_;
 
     std::atomic<bool> imu_received_;
