@@ -113,7 +113,7 @@ static const std::map<ActuatorType, ActuatorOperation> ACTUATOR_OPERATION_MAPPIN
     {ActuatorType::ROBSTRIDE_00, {4 * M_PI, 50, 17, 500.0, 5.0,}},
     {ActuatorType::ROBSTRIDE_01, {4 * M_PI, 44, 17, 500.0, 5.0,}},
     {ActuatorType::ROBSTRIDE_02, {4 * M_PI, 44, 17, 500.0, 5.0,}},
-    {ActuatorType::ROBSTRIDE_03, {4 * M_PI, 50, 60, 5000.0, 100.0,}},
+    {ActuatorType::ROBSTRIDE_03, {4 * M_PI, 20, 60, 5000.0, 100.0,}},
     {ActuatorType::ROBSTRIDE_04, {4 * M_PI, 15, 120, 5000.0, 100.0,}},
     {ActuatorType::ROBSTRIDE_05, {4 * M_PI, 33, 17, 500.0, 5.0,}},
     {ActuatorType::ROBSTRIDE_06, {4 * M_PI, 20, 60, 5000.0, 100.0,}},
@@ -215,22 +215,22 @@ public:
         error_code = uint8_t((can_id >> 16) & 0x3F);
         pattern = uint8_t((can_id >> 22) & 0x03);
 
-        // std::cout << "canid bits = " << std::bitset<32>(can_id) << std::endl;
-        // std::cout << "data bits = ";
-        // for (int i = 7; i >= 0; --i) { // 从高字节到低字节打印
-        //     std::cout << std::bitset<8>(frame.data[i]) << " ";
-        // }
-        std::cout << "canid = 0x" << std::hex << std::uppercase << can_id << std::dec << std::endl;
+        // 限频采样打印（方案C）：所有电机合计每 1000 帧打印一次，避免高频终端 IO 阻塞控制循环
+        static unsigned long recv_frame_count = 0;
+        const bool do_debug_print = (++recv_frame_count % 1000 == 0);
 
-        // std::cout << "data = ";
-        for (int i = 0; i < 8; ++i)
+        if (do_debug_print)
         {
-            std::cout << "data[" << i << "] = 0x"
-                << std::setw(2) << std::setfill('0')
-                << std::hex << std::uppercase
-                << static_cast<int>(frame.data[i]) << "  ";
+            std::cout << "canid = 0x" << std::hex << std::uppercase << can_id << std::dec << std::endl;
+            for (int i = 0; i < 8; ++i)
+            {
+                std::cout << "data[" << i << "] = 0x"
+                    << std::setw(2) << std::setfill('0')
+                    << std::hex << std::uppercase
+                    << static_cast<int>(frame.data[i]) << "  ";
+            }
+            std::cout << std::dec << std::endl; // 恢复为十进制输出
         }
-        std::cout << std::dec << std::endl; // 恢复为十进制输出
 
         std::vector<uint8_t> data(frame.data, frame.data + frame.can_dlc);
 
@@ -239,10 +239,15 @@ public:
 
     std::tuple<float, float, float, float> return_data_pvtt()
     {
-        std::cout << "-----position_feedback: " << position_ << std::endl;
-        std::cout << "-----velocity_feedback: " << velocity_ << std::endl;
-        std::cout << "-----torque: " << torque_ << std::endl;
-        std::cout << "-----temperature: " << temperature_ << std::endl;
+        // 限频采样打印：每 1000 次调用打印一次
+        static unsigned long pvtt_count = 0;
+        if (++pvtt_count % 1000 == 0)
+        {
+            std::cout << "-----position_feedback: " << position_ << std::endl;
+            std::cout << "-----velocity_feedback: " << velocity_ << std::endl;
+            std::cout << "-----torque: " << torque_ << std::endl;
+            std::cout << "-----temperature: " << temperature_ << std::endl;
+        }
 
         return std::make_tuple(position_, velocity_, torque_, temperature_);
     }
@@ -267,6 +272,16 @@ public:
                                                                float velocity_rad_s,
                                                                float kp = 0.5f,
                                                                float kd = 0.1f);
+    // 只发送运控指令不等待反馈（批量发送阶段使用）
+    void send_motion_command_no_wait(float torque,
+                                     float position_rad,
+                                     float velocity_rad_s,
+                                     float kp,
+                                     float kd);
+
+    // 在 deadline 前循环等待并解析状态帧(0x02)/参数帧(0x11)；
+    // 收到有效反馈返回 true，超时返回 false（反馈保持旧值）
+    bool receive_feedback_until(std::chrono::steady_clock::time_point deadline);
 
     float uint_to_float(uint16_t x_int, float x_min, float x_max, int bits)
     {
@@ -305,6 +320,11 @@ public:
         return data_float;
     }
 
+private:
+    // 尝试解析单帧：状态帧(0x02)与参数帧(0x11)解析成功返回 true；
+    // 其他类型（确认帧/故障帧等）返回 false 由调用方决定跳过还是继续
+    bool try_parse_frame(uint8_t communication_type, const std::vector<uint8_t>& data);
+
 public:
     std::string iface;
     uint8_t master_id;
@@ -318,6 +338,10 @@ public:
     float velocity_ = 0.0;
     float torque_ = 0.0;
     float temperature_ = 0.0;
+    // 最近故障码（0=无故障；收到正常状态帧后清零。2=欠压，含义见电机手册）
+    int fault_code_ = 0;
+    // 累计故障帧计数（自节点启动起）
+    unsigned long fault_count_ = 0;
 
     uint8_t error_code = 0;
     uint8_t pattern = 0;

@@ -13,14 +13,14 @@ def generate_launch_description():
     zrobot_bridge_dir = get_package_share_directory('zrobot_bridge')
     config_file = os.path.join(zrobot_bridge_dir, 'config', 'motor_config.yaml')
     
-    # 创建节点
+    # 创建节点（默认 INFO 级别；调试 CAN 报文时用 -p 或临时加 --log-level DEBUG）
     motor_controller_node = Node(
         package='zrobot_bridge',
         executable='motor_controller_node',
         name='motor_controller_node',
         output='screen',
         parameters=[config_file],
-        arguments=['--ros-args', '--log-level', 'DEBUG']
+        # arguments=['--ros-args', '--log-level', 'DEBUG']
     )
     
     return LaunchDescription([

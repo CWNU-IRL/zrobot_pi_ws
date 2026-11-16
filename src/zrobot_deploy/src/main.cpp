@@ -4,6 +4,8 @@
 #include "zrobot_deploy/PTLocomotion.h"
 #include "zrobot_deploy/Damping.h"
 #include <rclcpp/rclcpp.hpp>
+#include <battery_control/srv/force_shutdown.hpp>
+#include <chrono>
 #include <memory>
 #include <termios.h>
 #include <unistd.h>
@@ -65,6 +67,7 @@ void printMenu()
     std::cout << "  [T] - 启动 PTLocomotion 状态机 (.pt 推理)\n";
     std::cout << "  [D] - 启动 Damping 状态机 (仿真阻尼模式)\n";
     std::cout << "  [S] - 停止当前状态机\n";
+    std::cout << "  [P] - 电池强制关机 (3秒内再按一次P确认执行)\n";
     std::cout << "  [Q] - 退出程序\n";
     std::cout << "========================================\n\n";
 }
@@ -89,6 +92,42 @@ int main(int argc, char** argv)
     printMenu();
     
     bool running = true;
+
+    // 电池强制关机（P 键触发，3 秒内双击 P 确认，避免误触瞬间断电）
+    auto battery_shutdown_client =
+        node->create_client<battery_control::srv::ForceShutdown>("/battery/force_shutdown");
+    bool battery_armed = false;
+    auto battery_armed_time = std::chrono::steady_clock::now();
+    auto force_battery_shutdown = [&]() {
+        if (!battery_shutdown_client->wait_for_service(std::chrono::milliseconds(500)))
+        {
+            RCLCPP_ERROR(node->get_logger(),
+                         "/battery/force_shutdown 服务不可用（battery_control 节点未启动？），未执行");
+            return;
+        }
+        auto request = std::make_shared<battery_control::srv::ForceShutdown::Request>();
+        request->confirm = true;  // 服务端要求显式确认才执行
+        auto future = battery_shutdown_client->async_send_request(request);
+        if (rclcpp::spin_until_future_complete(node, future, std::chrono::seconds(3))
+            == rclcpp::FutureReturnCode::SUCCESS)
+        {
+            auto response = future.get();
+            if (response->success)
+            {
+                RCLCPP_WARN(node->get_logger(), "电池强制关机指令已下发: %s",
+                            response->message.c_str());
+            }
+            else
+            {
+                RCLCPP_ERROR(node->get_logger(), "电池强制关机被拒绝: %s",
+                             response->message.c_str());
+            }
+        }
+        else
+        {
+            RCLCPP_ERROR(node->get_logger(), "/battery/force_shutdown 调用超时，未执行");
+        }
+    };
     
     while (rclcpp::ok() && running) {
         // 检查键盘输入
@@ -111,7 +150,12 @@ int main(int argc, char** argv)
                     current_fsm = std::make_shared<FixStand>(node);
                     current_fsm->initialize();
                     
-                    std::cout << "\n>>> FixStand 状态机已启动 <<<\n\n";
+                    if (!current_fsm->isReady()) {
+                        std::cout << "\n>>> FixStand 初始化失败，状态机未启动（详见上方错误日志）<<<\n\n";
+                        current_fsm.reset();
+                    } else {
+                        std::cout << "\n>>> FixStand 状态机已启动 <<<\n\n";
+                    }
                     break;
                 }
 
@@ -130,7 +174,12 @@ int main(int argc, char** argv)
                     current_fsm = std::make_shared<Locomotion>(node);
                     current_fsm->initialize();
 
-                    std::cout << "\n>>> Locomotion 状态机已启动 <<<\n\n";
+                    if (!current_fsm->isReady()) {
+                        std::cout << "\n>>> Locomotion 模型加载失败，状态机未启动（详见上方错误日志）<<<\n\n";
+                        current_fsm.reset();
+                    } else {
+                        std::cout << "\n>>> Locomotion 状态机已启动 <<<\n\n";
+                    }
                     break;
                 }
 
@@ -147,7 +196,12 @@ int main(int argc, char** argv)
                     current_fsm = std::make_shared<PTLocomotion>(node);
                     current_fsm->initialize();
 
-                    std::cout << "\n>>> PTLocomotion 状态机已启动 <<<\n\n";
+                    if (!current_fsm->isReady()) {
+                        std::cout << "\n>>> PTLocomotion 模型加载失败，状态机未启动（详见上方错误日志）<<<\n\n";
+                        current_fsm.reset();
+                    } else {
+                        std::cout << "\n>>> PTLocomotion 状态机已启动 <<<\n\n";
+                    }
                     break;
                 }
 
@@ -166,10 +220,45 @@ int main(int argc, char** argv)
                     current_fsm = std::make_shared<Damping>(node);
                     current_fsm->initialize();
 
-                    std::cout << "\n>>> Damping 状态机已启动 <<<\n\n";
+                    if (!current_fsm->isReady()) {
+                        std::cout << "\n>>> Damping 初始化失败，状态机未启动（详见上方错误日志）<<<\n\n";
+                        current_fsm.reset();
+                    } else {
+                        std::cout << "\n>>> Damping 状态机已启动 <<<\n\n";
+                    }
                     break;
                 }
-                
+
+                case 'p':
+                case 'P':
+                {
+                    const auto now = std::chrono::steady_clock::now();
+                    if (battery_armed
+                        && std::chrono::duration<double>(now - battery_armed_time).count() <= 3.0)
+                    {
+                        battery_armed = false;
+                        std::cout << "\n>>> 已确认，正在下发电池强制关机指令… <<<\n";
+                        force_battery_shutdown();
+                        // 关机指令已下发：停止当前状态机（join 推理线程、落盘日志）并立即退出进程
+                        if (current_fsm)
+                        {
+                            RCLCPP_INFO(node->get_logger(), "Stopping current FSM before exit...");
+                            current_fsm->exit();
+                            current_fsm.reset();
+                        }
+                        running = false;
+                        std::cout << "\n>>> 电池强制关机指令已下发，程序退出 <<<\n\n";
+                    }
+                    else
+                    {
+                        battery_armed = true;
+                        battery_armed_time = now;
+                        std::cout << "\n>>> 警告：强制关机会立即切断电池输出！"
+                                     "3 秒内再按一次 P 确认执行，超时或按其他键取消 <<<\n";
+                    }
+                    break;
+                }
+
                 case 's':
                 case 'S':
                 {
@@ -185,7 +274,12 @@ int main(int argc, char** argv)
                             RCLCPP_INFO(node->get_logger(), "Damping stopped, auto switching to FixStand...");
                             current_fsm = std::make_shared<FixStand>(node);
                             current_fsm->initialize();
-                            std::cout << "\n>>> 已自动切换到 FixStand 状态机 <<<\n\n";
+                            if (!current_fsm->isReady()) {
+                                std::cout << "\n>>> FixStand 初始化失败，保持停止状态 <<<\n\n";
+                                current_fsm.reset();
+                            } else {
+                                std::cout << "\n>>> 已自动切换到 FixStand 状态机 <<<\n\n";
+                            }
                         }
                     } else {
                         std::cout << "\n>>> 没有正在运行的状态机 <<<\n\n";
@@ -214,11 +308,70 @@ int main(int argc, char** argv)
         
         // 运行当前状态机
         if (current_fsm) {
-            current_fsm->run();
+            try
+            {
+                current_fsm->run();
+            }
+            catch (const std::exception &e)
+            {
+                // Ctrl+C 后 rclcpp 上下文失效，服务调用可能抛 RCLError；
+                // 捕获后由下方 rclcpp::ok() 判空退出，避免未捕获异常导致 terminate
+                RCLCPP_ERROR(node->get_logger(), "FSM run exception: %s", e.what());
+                current_fsm->exit();
+                current_fsm.reset();
+
+                // 关闭过程（Ctrl+C）触发的异常：直接退出主循环，
+                // 否则后续 spin_some 会在失效上下文上抛未捕获异常导致 terminate
+                if (!rclcpp::ok())
+                {
+                    break;
+                }
+            }
+
+            // 处理状态机内部发起的切换请求（如 IMU 超时 → Damping）
+            FSMState switch_target = FSMState::IDLE;
+            if (current_fsm && current_fsm->takeSwitchRequest(switch_target)) {
+                RCLCPP_WARN(node->get_logger(), "FSM requested switch to state %d, switching...",
+                            static_cast<int>(switch_target));
+                current_fsm->exit();
+                current_fsm.reset();
+
+                if (switch_target == FSMState::DAMPING) {
+                    RCLCPP_INFO(node->get_logger(), "Auto switching to Damping FSM...");
+                    current_fsm = std::make_shared<Damping>(node);
+                    current_fsm->initialize();
+                    if (!current_fsm->isReady()) {
+                        RCLCPP_ERROR(node->get_logger(),
+                                     "Auto Damping initialization failed, motors stay frozen");
+                        current_fsm.reset();
+                    }
+                } else if (switch_target == FSMState::FIX_STAND) {
+                    RCLCPP_INFO(node->get_logger(), "Auto switching to FixStand FSM...");
+                    current_fsm = std::make_shared<FixStand>(node);
+                    current_fsm->initialize();
+                    if (!current_fsm->isReady()) {
+                        RCLCPP_ERROR(node->get_logger(),
+                                     "Auto FixStand initialization failed, motors stay frozen");
+                        current_fsm.reset();
+                    }
+                } else {
+                    RCLCPP_WARN(node->get_logger(), "Unsupported switch target %d, staying stopped",
+                                static_cast<int>(switch_target));
+                }
+            }
         }
         
         // 处理 ROS 回调（非阻塞）
-        rclcpp::spin_some(node);
+        try
+        {
+            rclcpp::spin_some(node);
+        }
+        catch (const std::exception &e)
+        {
+            // 关闭竞态下 spin_some 可能抛 RCLError；直接退出主循环
+            RCLCPP_WARN(node->get_logger(), "spin_some exception, exiting loop: %s", e.what());
+            break;
+        }
         
         // 控制循环频率，根据循环实际耗时自动计算休眠时间
         rate.sleep();

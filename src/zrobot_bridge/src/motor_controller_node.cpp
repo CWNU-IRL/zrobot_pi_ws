@@ -1,6 +1,7 @@
 #include "zrobot_bridge/motor_controller.h"
 #include <string>
 #include <vector>
+#include <chrono>
 
 /**
  * @brief MotorControllerNode 构造函数
@@ -146,6 +147,13 @@ MotorControllerNode::MotorControllerNode()
 
     RCLCPP_INFO(logger_, "零点设置服务已创建: /motor_controller_node/set_zeros");
 
+    disable_motors_service_ = this->create_service<rs_interface::srv::DisableMotors>(
+        "disable_motors",
+        std::bind(&MotorControllerNode::handle_disable_motors_service, this,
+                  std::placeholders::_1, std::placeholders::_2));
+
+    RCLCPP_INFO(logger_, "电机失能服务已创建: /motor_controller_node/disable_motors");
+
     get_positions_service_ = this->create_service<rs_interface::srv::GetPositions>(
         "get_positions",
         std::bind(&MotorControllerNode::handle_get_positions_service, this,
@@ -248,7 +256,7 @@ void MotorControllerNode::handle_rob_stride_service(
 {
     std::lock_guard<std::mutex> lock(motors_mutex_);
 
-    RCLCPP_INFO(logger_, "接收到RobStrideMsgs服务请求");
+    RCLCPP_DEBUG(logger_, "接收到RobStrideMsgs服务请求");
 
     // 验证请求数据
     // if (request->positions.size() != NUM_MOTORS)
@@ -262,67 +270,121 @@ void MotorControllerNode::handle_rob_stride_service(
     // 初始化响应数据
     try
     {
-        // 向所有电机发送指令并收集反馈
+        // 请求级增益覆盖：kds 任意一项非零视为显式指定（Damping 模式 kp=0/kd>0），
+        // 全零则沿用配置文件 motor_kps/motor_kds（FixStand/Locomotion 训练增益）
+        bool use_request_gains = false;
+        for (int i = 0; i < NUM_MOTORS; ++i)
+        {
+            if (request->kds[i] != 0.0f)
+            {
+                use_request_gains = true;
+                break;
+            }
+        }
+
+        // 阶段 1：批量发送所有电机的运控指令（不等待反馈）。
+        // 串行"发一收一"会把每台电机的响应延迟累加（慢电机 20-30ms/台），
+        // 批量发送后电机响应并行到达，服务总耗时 ≈ 发送时间 + 最长响应延迟。
         for (int i = 0; i < NUM_MOTORS; ++i)
         {
             if (!motors_[i])
             {
-                RCLCPP_WARN(logger_, "电机%d未初始化，跳过", i);
+                RCLCPP_WARN_ONCE(logger_, "电机%d未初始化，跳过", i);
                 continue;
             }
 
             float target_position = request->positions[i];
+            const float kp = use_request_gains ? request->kps[i] : motor_kps_[i];
+            const float kd = use_request_gains ? request->kds[i] : motor_kds_[i];
+
+            // TODO Motor Angle 
+            // if (i == ) {target_position = -target_position}
 
             try
             {
-                // CSP模式指令
-                // auto [pos, vel, torq, temp] = motors_[i]->RobStrite_Motor_PosCSP_control(
-                //     2.0f,                  // velocity (rad/s)
-                //     target_position        // position (rad)
-                // );
-
-                // 发送运控模式指令（位置 + 速度 + KP + KD）
-                // 参数：torque, position, velocity, kp, kd
-                // auto [pos, vel, torq, temp] = motors_[i]->send_motion_command(
-                //     0.0f,                  // torque
-                //     target_position,       // position (rad)
-                //     0.0f,                  // velocity (rad/s)
-                //     0.5f,                  // kp
-                //     0.1f                   // kd
-                // );
-
-                // 参数：torque, position, velocity, kp, kd
-                auto [pos, vel, torq, temp] = motors_[i]->send_motion_command(
+                // 批量发送：只发指令不等待反馈（反馈统一在阶段 2 收集），
+                // 避免串行"发一收一"把各电机响应延迟累加
+                motors_[i]->send_motion_command_no_wait(
                     0.0f,            // torque
                     target_position, // position (rad)
                     0.0f,            // velocity (rad/s)
-                    motor_kps_[i],            // kp
-                    motor_kds_[i]             // kd
+                    kp,
+                    kd
                 );
-
-                // 存储反馈数据
-                response->feedback_positions[i] = pos;
-                response->feedback_velocities[i] = vel;
-                response->feedback_torques[i] = torq;
-                response->feedback_temperatures[i] = temp;
-
-                RCLCPP_DEBUG(logger_,
-                             "电机%d 目标位置: %.3f rad, 反馈 - 位置: %.3f, 速度: %.3f, 扭矩: %.3f, 温度: %.1f",
-                             i, target_position, pos, vel, torq, temp);
             }
             catch (const std::exception &e)
             {
-                RCLCPP_WARN(logger_, "电机%d 控制失败: %s", i, e.what());
-                response->feedback_positions[i] = 0.0f;
-                response->feedback_velocities[i] = 0.0f;
-                response->feedback_torques[i] = 0.0f;
-                response->feedback_temperatures[i] = 0.0f;
+                RCLCPP_WARN_THROTTLE(
+                    logger_, *this->get_clock(), 2000,
+                    "电机%d 指令发送失败: %s", i, e.what());
             }
+        }
+
+        // 阶段 2：收集反馈，采用"快扫 + 补收"两轮结构。
+        // 快扫：给每台电机 1ms 余量，有帧立即收走、无帧立即返回（近似非阻塞），
+        //   避免单台慢/丢帧电机在共享窗口内阻塞耗尽后续电机的等待时间；
+        //   注意 deadline 必须大于当前时刻，否则 receive_feedback_until 的循环
+        //   一次都不会执行（等于空操作）。
+        // 补收：对快扫未命中的电机，共享剩余 35ms 窗口等待其响应。
+        std::array<bool, NUM_MOTORS> received{};
+        for (int i = 0; i < NUM_MOTORS; ++i)
+        {
+            if (!motors_[i])
+            {
+                continue;
+            }
+            try
+            {
+                received[i] = motors_[i]->receive_feedback_until(
+                    std::chrono::steady_clock::now() + std::chrono::milliseconds(1));
+            }
+            catch (const std::exception &e)
+            {
+                RCLCPP_WARN_THROTTLE(
+                    logger_, *this->get_clock(), 2000,
+                    "电机%d 快扫接收失败: %s", i, e.what());
+                received[i] = false;
+            }
+        }
+
+        const auto feedback_deadline =
+            std::chrono::steady_clock::now() + std::chrono::milliseconds(35);
+        for (int i = 0; i < NUM_MOTORS; ++i)
+        {
+            if (!motors_[i] || received[i])
+            {
+                continue;
+            }
+            try
+            {
+                motors_[i]->receive_feedback_until(feedback_deadline);
+            }
+            catch (const std::exception &e)
+            {
+                RCLCPP_WARN_THROTTLE(
+                    logger_, *this->get_clock(), 2000,
+                    "电机%d 补收反馈失败: %s", i, e.what());
+            }
+        }
+
+        // 统一从电机缓存读取最近一次有效反馈（超时/丢帧时保持旧值）
+        for (int i = 0; i < NUM_MOTORS; ++i)
+        {
+            if (!motors_[i])
+            {
+                continue;
+            }
+            response->feedback_positions[i] = motors_[i]->position_;
+            response->feedback_velocities[i] = motors_[i]->velocity_;
+            response->feedback_torques[i] = motors_[i]->torque_;
+            response->feedback_temperatures[i] = motors_[i]->temperature_;
+            response->fault_codes[i] = motors_[i]->fault_code_;
+            response->fault_counts[i] = static_cast<int32_t>(motors_[i]->fault_count_);
         }
 
         response->success = true;
         response->message = "所有电机已成功控制";
-        RCLCPP_INFO(logger_, "RobStrideMsgs服务请求处理完成");
+        RCLCPP_DEBUG(logger_, "RobStrideMsgs服务请求处理完成");
     }
     catch (const std::exception &e)
     {
@@ -366,8 +428,8 @@ void MotorControllerNode::handle_set_zeros_service(
     {
         if (!motors_[i])
         {
-            RCLCPP_WARN(logger_, "电机%d未初始化，跳过零点设置", i);
-            has_error = true;
+            // 未安装的电机跳过，不计入失败
+            RCLCPP_DEBUG(logger_, "电机%d未初始化，跳过零点设置", i);
             continue;
         }
 
@@ -409,39 +471,96 @@ void MotorControllerNode::handle_set_zeros_service(
  *
  * @see RobStrideMotor::read_initial_position() - 读取电机位置的底层方法
  */
-void MotorControllerNode::handle_get_positions_service(
-    const std::shared_ptr<rs_interface::srv::GetPositions::Request>,
-    std::shared_ptr<rs_interface::srv::GetPositions::Response> response)
+/**
+ * @brief 电机失能服务回调（安全保护触发）
+ *
+ * 对全部已初始化电机调用 Disenable_Motor(0)，立即切断输出。
+ * 注意：失能后需重启桥接节点（重新 enable）才能恢复控制。
+ */
+void MotorControllerNode::handle_disable_motors_service(
+    const std::shared_ptr<rs_interface::srv::DisableMotors::Request>,
+    std::shared_ptr<rs_interface::srv::DisableMotors::Response> response)
 {
     std::lock_guard<std::mutex> lock(motors_mutex_);
 
-    RCLCPP_INFO(logger_, "接收到获取电机位置服务请求");
+    RCLCPP_WARN(logger_, "接收到电机失能请求，正在失能全部电机");
 
     bool has_error = false;
+    int disabled_count = 0;
+
+    for (int i = 0; i < NUM_MOTORS; ++i)
+    {
+        if (!motors_[i])
+        {
+            continue;
+        }
+        try
+        {
+            motors_[i]->Disenable_Motor(0);
+            ++disabled_count;
+        }
+        catch (const std::exception &e)
+        {
+            RCLCPP_ERROR(logger_, "失能电机%d失败: %s", i, e.what());
+            has_error = true;
+        }
+    }
+
+    response->success = !has_error;
+    response->message = has_error
+        ? "部分电机失能失败，详见日志"
+        : "已失能 " + std::to_string(disabled_count) + " 个电机";
+}
+
+void MotorControllerNode::handle_get_positions_service(
+    const std::shared_ptr<rs_interface::srv::GetPositions::Request>,
+    std::shared_ptr<rs_interface::srv::GetPositions::Response> response)
+{    std::lock_guard<std::mutex> lock(motors_mutex_);
+
+    RCLCPP_DEBUG(logger_, "接收到获取电机位置服务请求");
+
+    bool has_error = false;
+
+    // 下肢电机 0-11 必须在线并成功返回位置，否则视为读取失败；
+    // 上肢电机 12-22 未安装（未初始化）时不阻塞，位置保持 0
+    static constexpr int LEG_MOTOR_COUNT = 12;
 
     // 遍历所有电机，读取初始位置
     for (int i = 0; i < NUM_MOTORS; ++i)
     {
         if (!motors_[i])
         {
-            RCLCPP_WARN(logger_, "电机%d未初始化，位置设为0", i);
             response->feedback_positions[i] = 0.0f;
-            has_error = true;
+            if (i < LEG_MOTOR_COUNT)
+            {
+                RCLCPP_ERROR(logger_, "下肢电机%d未初始化，位置读取失败", i);
+                has_error = true;
+            }
+            else
+            {
+                RCLCPP_DEBUG(logger_, "电机%d未初始化，位置保持0", i);
+            }
             continue;
         }
 
         try
         {
             auto [pos, vel, torq, temp] = motors_[i]->enable_motor();
+
+            // TODO Motor Angle
+
             response->feedback_positions[i] = pos;
 
-            RCLCPP_INFO(logger_, "电机%d当前位置: %.3f rad", i, pos);
+            RCLCPP_DEBUG(logger_, "电机%d当前位置: %.3f rad", i, pos);
         }
         catch (const std::exception &e)
         {
             RCLCPP_ERROR(logger_, "读取电机%d位置失败: %s", i, e.what());
             response->feedback_positions[i] = 0.0f;
-            has_error = true;
+            if (i < LEG_MOTOR_COUNT)
+            {
+                has_error = true;
+            }
         }
     }
 
@@ -450,7 +569,7 @@ void MotorControllerNode::handle_get_positions_service(
                             ? "部分或全部电机位置读取失败"
                             : "所有电机位置读取成功";
 
-    RCLCPP_INFO(logger_, "位置读取服务请求处理完成");
+    RCLCPP_DEBUG(logger_, "位置读取服务请求处理完成");
 }
 
 int main(int argc, char *argv[])

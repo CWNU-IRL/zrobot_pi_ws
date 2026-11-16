@@ -1,0 +1,6 @@
+# 查询电池当前状态（一次性）
+int32 address                    # -1 = 使用节点默认地址
+---
+bool success                     # false = 该地址未发现电池
+string report                    # 人类可读摘要（与 CLI 输出同风格）
+BatteryStatus status             # 同包消息直接用类型名引用

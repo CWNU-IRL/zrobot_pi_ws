@@ -1,0 +1,5 @@
+# 清除故障（被动指令 0x04EF bit7）
+---
+bool success
+string message
+int32 frames_sent

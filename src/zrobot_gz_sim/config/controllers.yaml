@@ -10,17 +10,18 @@ controller_manager:
 
 joint_group_effort_controller:
   ros__parameters:
+    # 顺序必须与 bridge_params.yaml 的 joint_names（部署层电机 id 顺序）一致
     joints:
-      - L_hip_roll_joint
-      - L_hip_yaw_joint
-      - L_hip_pitch_joint
-      - L_knee_joint
       - L_foot_pitch_joint
       - L_foot_roll_joint
-      - R_hip_roll_joint
-      - R_hip_yaw_joint
-      - R_hip_pitch_joint
-      - R_knee_joint
+      - L_knee_joint
+      - L_hip_pitch_joint
+      - L_hip_yaw_joint
+      - L_hip_roll_joint
       - R_foot_pitch_joint
       - R_foot_roll_joint
+      - R_knee_joint
+      - R_hip_pitch_joint
+      - R_hip_yaw_joint
+      - R_hip_roll_joint
     interface_name: effort

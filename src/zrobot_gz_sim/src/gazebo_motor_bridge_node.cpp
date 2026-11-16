@@ -26,6 +26,22 @@ GazeboMotorBridgeNode::GazeboMotorBridgeNode()
     std::vector<double> default_kd(kNumMotors, 1.0);
     kp_ = this->declare_parameter<std::vector<double>>("kp", default_kp);
     kd_ = this->declare_parameter<std::vector<double>>("kd", default_kd);
+
+    auto default_signs = std::vector<double>(kNumMotors, 1.0);
+    auto motor_signs_param = this->declare_parameter<std::vector<double>>("motor_signs", default_signs);
+    motor_signs_.fill(1.0f);
+    if (motor_signs_param.size() != kNumMotors)
+    {
+        RCLCPP_WARN(get_logger(), "motor_signs size (%zu) != %zu, using all +1.0",
+                    motor_signs_param.size(), kNumMotors);
+    }
+    else
+    {
+        for (size_t i = 0; i < kNumMotors; ++i)
+        {
+            motor_signs_[i] = (motor_signs_param[i] >= 0.0) ? 1.0f : -1.0f;
+        }
+    }
     
     feedback_temperature_ = static_cast<float>(this->declare_parameter<double>("feedback_temperature", 35.0));
 
@@ -243,9 +259,38 @@ void GazeboMotorBridgeNode::on_rob_stride_control(
         velocities = last_velocities_;
         efforts = last_efforts_;
 
+        // 踝关节（并联机构 → 直接关节）：先 FK 将电机角转回 pitch/roll（机构约定），
+        // 再乘 motor_signs_ 转成 URDF 约定并加零位偏移
+        auto handle_ankle = [&](size_t idx_pitch, size_t idx_roll,
+                                float& prev_pitch, float& prev_roll) {
+            const double t1 = request->positions[idx_pitch];
+            const double t2 = request->positions[idx_roll];
+            const auto fw = ankle_ik_.fw(static_cast<double>(prev_pitch),
+                                         static_cast<double>(prev_roll), t1, t2);
+            if (fw.error_state == 0) {
+                prev_pitch = static_cast<float>(fw.pitch);
+                prev_roll  = static_cast<float>(fw.roll);
+            }
+            const double target_q_pitch = motor_signs_[idx_pitch] * prev_pitch + zero_offsets_[idx_pitch];
+            const double target_q_roll  = motor_signs_[idx_roll]  * prev_roll  + zero_offsets_[idx_roll];
+            target_positions_[idx_pitch] = target_q_pitch;
+            target_positions_[idx_roll]  = target_q_roll;
+            cmd.data[idx_pitch] = compute_tau(target_q_pitch, positions[idx_pitch], 0.0,
+                                              velocities[idx_pitch], kp_[idx_pitch], kd_[idx_pitch]);
+            cmd.data[idx_roll]  = compute_tau(target_q_roll,  positions[idx_roll],  0.0,
+                                              velocities[idx_roll],  kp_[idx_roll],  kd_[idx_roll]);
+        };
+        handle_ankle(kIdxLAnklePitch, kIdxLAnkleRoll, prev_L_pitch_, prev_L_roll_);
+        handle_ankle(kIdxRAnklePitch, kIdxRAnkleRoll, prev_R_pitch_, prev_R_roll_);
+
         for (size_t i = 0; i < active_joint_count_; ++i)
         {
-            double target_q = request->positions[i] + zero_offsets_[i];
+            if (i == kIdxLAnklePitch || i == kIdxLAnkleRoll ||
+                i == kIdxRAnklePitch || i == kIdxRAnkleRoll)
+            {
+                continue;
+            }
+            double target_q = motor_signs_[i] * request->positions[i] + zero_offsets_[i];
             target_positions_[i] = target_q; // 更新目标位置，供定时器使用
             double current_q = positions[i];
             double current_dq = velocities[i];
@@ -257,11 +302,45 @@ void GazeboMotorBridgeNode::on_rob_stride_control(
 
     command_pub_->publish(cmd);
     
-    // 构建响应数据
+    // 构建响应数据（硬件约定，与部署层 joint_signs_ 语义一致）
+    // 踝关节: URDF 偏差 × sign → 机构 pitch/roll → IK 电机角; 速度经雅可比转换
+    auto fill_ankle_feedback = [&](size_t idx_pitch, size_t idx_roll,
+                                   double mech_pitch, double mech_roll,
+                                   double pitch_vel, double roll_vel) {
+        const auto ikr = ankle_ik_.ik(mech_pitch, mech_roll);
+        response->feedback_positions[idx_pitch] = ikr.theta1;
+        response->feedback_positions[idx_roll]  = ikr.theta2;
+        // 反馈速度约定 = -θ̇_raw: [θ̇1, θ̇2]ᵀ = Jc·[ṙ, ṗ]ᵀ
+        const auto jr = ankle_ik_.Jac(mech_pitch, mech_roll, -ikr.theta1, -ikr.theta2);
+        const double dth1_raw = jr.Jc[0][0]*roll_vel + jr.Jc[0][1]*pitch_vel;
+        const double dth2_raw = jr.Jc[1][0]*roll_vel + jr.Jc[1][1]*pitch_vel;
+        response->feedback_velocities[idx_pitch] = static_cast<float>(-dth1_raw);
+        response->feedback_velocities[idx_roll]  = static_cast<float>(-dth2_raw);
+    };
+    {
+        const double mech_L_pitch = motor_signs_[kIdxLAnklePitch] * (positions[kIdxLAnklePitch] - zero_offsets_[kIdxLAnklePitch]);
+        const double mech_L_roll  = motor_signs_[kIdxLAnkleRoll]  * (positions[kIdxLAnkleRoll]  - zero_offsets_[kIdxLAnkleRoll]);
+        const double L_pitch_vel  = motor_signs_[kIdxLAnklePitch] * velocities[kIdxLAnklePitch];
+        const double L_roll_vel   = motor_signs_[kIdxLAnkleRoll]  * velocities[kIdxLAnkleRoll];
+        fill_ankle_feedback(kIdxLAnklePitch, kIdxLAnkleRoll, mech_L_pitch, mech_L_roll, L_pitch_vel, L_roll_vel);
+    }
+    {
+        const double mech_R_pitch = motor_signs_[kIdxRAnklePitch] * (positions[kIdxRAnklePitch] - zero_offsets_[kIdxRAnklePitch]);
+        const double mech_R_roll  = motor_signs_[kIdxRAnkleRoll]  * (positions[kIdxRAnkleRoll]  - zero_offsets_[kIdxRAnkleRoll]);
+        const double R_pitch_vel  = motor_signs_[kIdxRAnklePitch] * velocities[kIdxRAnklePitch];
+        const double R_roll_vel   = motor_signs_[kIdxRAnkleRoll]  * velocities[kIdxRAnkleRoll];
+        fill_ankle_feedback(kIdxRAnklePitch, kIdxRAnkleRoll, mech_R_pitch, mech_R_roll, R_pitch_vel, R_roll_vel);
+    }
+
     for (size_t i = 0; i < kNumMotors; ++i)
     {
-        response->feedback_positions[i] = positions[i] - zero_offsets_[i];
-        response->feedback_velocities[i] = velocities[i];
+        if (i == kIdxLAnklePitch || i == kIdxLAnkleRoll ||
+            i == kIdxRAnklePitch || i == kIdxRAnkleRoll)
+        {
+            continue;
+        }
+        response->feedback_positions[i] = motor_signs_[i] * (positions[i] - zero_offsets_[i]);
+        response->feedback_velocities[i] = motor_signs_[i] * velocities[i];
         response->feedback_torques[i] = efforts[i];
         response->feedback_temperatures[i] = feedback_temperature_;
     }
@@ -296,9 +375,31 @@ void GazeboMotorBridgeNode::on_get_positions(
 {
     std::lock_guard<std::mutex> lock(state_mutex_);
 
+    // 非踝关节: 硬件约定 = sign × (URDF 位置 - 零位偏移)
     for (size_t i = 0; i < kNumMotors; ++i)
     {
-        response->feedback_positions[i] = last_positions_[i] - zero_offsets_[i];
+        if (i == kIdxLAnklePitch || i == kIdxLAnkleRoll ||
+            i == kIdxRAnklePitch || i == kIdxRAnkleRoll)
+        {
+            continue;
+        }
+        response->feedback_positions[i] = motor_signs_[i] * (last_positions_[i] - zero_offsets_[i]);
+    }
+
+    // 踝关节: URDF 偏差 × sign → 机构 pitch/roll → IK 电机角（硬件约定）
+    {
+        const double mech_L_pitch = motor_signs_[kIdxLAnklePitch] * (last_positions_[kIdxLAnklePitch] - zero_offsets_[kIdxLAnklePitch]);
+        const double mech_L_roll  = motor_signs_[kIdxLAnkleRoll]  * (last_positions_[kIdxLAnkleRoll]  - zero_offsets_[kIdxLAnkleRoll]);
+        const auto ikL = ankle_ik_.ik(mech_L_pitch, mech_L_roll);
+        response->feedback_positions[kIdxLAnklePitch] = ikL.theta1;
+        response->feedback_positions[kIdxLAnkleRoll]  = ikL.theta2;
+    }
+    {
+        const double mech_R_pitch = motor_signs_[kIdxRAnklePitch] * (last_positions_[kIdxRAnklePitch] - zero_offsets_[kIdxRAnklePitch]);
+        const double mech_R_roll  = motor_signs_[kIdxRAnkleRoll]  * (last_positions_[kIdxRAnkleRoll]  - zero_offsets_[kIdxRAnkleRoll]);
+        const auto ikR = ankle_ik_.ik(mech_R_pitch, mech_R_roll);
+        response->feedback_positions[kIdxRAnklePitch] = ikR.theta1;
+        response->feedback_positions[kIdxRAnkleRoll]  = ikR.theta2;
     }
 
     response->success = has_joint_state_;

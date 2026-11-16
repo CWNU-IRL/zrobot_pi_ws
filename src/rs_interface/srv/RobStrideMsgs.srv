@@ -1,10 +1,18 @@
 # 请求：23个电机目标位置（rad）。电机CAN ID由节点参数 motor_ids[23] 决定。
+# kps/kds：逐电机增益覆盖；全部为 0 时桥接层沿用其配置文件的 motor_kps/motor_kds
+# （Damping 模式传 kp=0/kd>0 实现电机内部原生阻尼，避免外环延迟反馈振荡）
 float32[23] positions
+float32[23] kps
+float32[23] kds
 ---
 # 响应：对应电机的反馈
 float32[23] feedback_positions
 float32[23] feedback_velocities
 float32[23] feedback_torques
 float32[23] feedback_temperatures
+# 每电机最近故障码（0=无故障；收到正常状态帧后清零。2=欠压，其余见电机手册）
+int32[23] fault_codes
+# 每电机累计故障帧计数（自桥接节点启动起）
+int32[23] fault_counts
 bool success
 string message

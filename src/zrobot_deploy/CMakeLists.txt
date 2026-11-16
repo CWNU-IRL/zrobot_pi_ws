@@ -12,6 +12,7 @@ endif()
 find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(rs_interface REQUIRED)
+find_package(battery_control REQUIRED)
 find_package(std_msgs REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(geometry_msgs REQUIRED)
@@ -58,6 +59,7 @@ add_executable(main src/main.cpp
 ament_target_dependencies(main
         rclcpp
         rs_interface
+        battery_control
         std_msgs
         sensor_msgs
         geometry_msgs
@@ -70,9 +72,12 @@ target_link_libraries(main
 )
 
 # Keep runtime dependency local to installed executable directory.
+# NOTE: with --symlink-install, $ORIGIN resolves to the build directory
+# (glibc resolves symlinks via /proc/self/exe), so also search the real
+# install prefix to locate libonnxruntime.so.1.16.3.
 set_target_properties(main PROPERTIES
         BUILD_WITH_INSTALL_RPATH TRUE
-        INSTALL_RPATH "$ORIGIN"
+        INSTALL_RPATH "$ORIGIN:${CMAKE_INSTALL_PREFIX}/lib/${PROJECT_NAME}"
 )
 
 target_include_directories(main

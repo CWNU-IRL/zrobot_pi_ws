@@ -4,6 +4,7 @@
 #include "rs_interface/srv/rob_stride_msgs.hpp"
 #include "rs_interface/srv/set_zeros.hpp"
 #include "rs_interface/srv/get_positions.hpp"
+#include "rs_interface/srv/disable_motors.hpp"
 #include "zrobot_bridge/motor_cfg.h"
 
 #include <memory>
@@ -37,6 +38,10 @@ private:
         const std::shared_ptr<rs_interface::srv::GetPositions::Request> request,
         std::shared_ptr<rs_interface::srv::GetPositions::Response> response);
 
+    void handle_disable_motors_service(
+        const std::shared_ptr<rs_interface::srv::DisableMotors::Request> request,
+        std::shared_ptr<rs_interface::srv::DisableMotors::Response> response);
+
     // 初始化电机
     void initialize_motors();
 
@@ -69,6 +74,7 @@ private:
     rclcpp::Service<rs_interface::srv::RobStrideMsgs>::SharedPtr service_;
     rclcpp::Service<rs_interface::srv::SetZeros>::SharedPtr set_zeros_service_;
     rclcpp::Service<rs_interface::srv::GetPositions>::SharedPtr get_positions_service_;
+    rclcpp::Service<rs_interface::srv::DisableMotors>::SharedPtr disable_motors_service_;
 
     // 互斥锁，用于电机访问的线程安全
     mutable std::mutex motors_mutex_;

@@ -1,0 +1,23 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>battery_control</name>
+  <version>1.0.0</version>
+  <description>因克斯 EC-BAT48V-468Wh 电池监控与控制（CAN4，SocketCAN）。发布 /battery/status 话题，提供 get_status / force_shutdown / clear_fault 服务。核心协议库复用仓库 cpp/ 目录。</description>
+  <maintainer email="c112@example.com">c112</maintainer>
+  <license>Apache-2.0</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+  <buildtool_depend>rosidl_default_generators</buildtool_depend>
+
+  <depend>rclcpp</depend>
+  <depend>std_msgs</depend>
+
+  <exec_depend>ros2launch</exec_depend>
+  <exec_depend>rosidl_default_runtime</exec_depend>
+  <member_of_group>rosidl_interface_packages</member_of_group>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>

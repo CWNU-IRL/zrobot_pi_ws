@@ -17,6 +17,8 @@
 #include "rs_interface/srv/rob_stride_msgs.hpp"
 #include "rs_interface/srv/set_zeros.hpp"
 
+#include "zrobot_gz_sim/paralleljoint_z1.h"
+
 class GazeboMotorBridgeNode : public rclcpp::Node
 {
 public:
@@ -69,6 +71,23 @@ private:
 
     std::vector<double> kp_;
     std::vector<double> kd_;
+
+    // 电机方向符号（电机 id 顺序，±1，模拟实机电机方向反转）
+    // cmd_urdf = sign × cmd_hw + offset; fb_hw = sign × (joint_urdf - offset)
+    std::array<float, kNumMotors> motor_signs_;
+
+    // 踝关节并联机构（模拟实机: 电机角 <-> pitch/roll）
+    // 注意: 与 zrobot_deploy/include/zrobot_deploy/paralleljoint_z1.h 保持同步
+    ParallelAnkle ankle_ik_;
+    float prev_L_pitch_ = 0.19f;   // FK 迭代初值（机构约定，默认姿态 pitch=0.3）
+    float prev_L_roll_  = 0.0f;
+    float prev_R_pitch_ = 0.19f;   // 右踝非镜像机构: URDF -0.3 → 机构 +0.3
+    float prev_R_roll_  = 0.0f;
+    // 踝关节电机索引（电机 id 约定，与部署层 dof_indices_ 一致）
+    static constexpr size_t kIdxLAnklePitch = 0;
+    static constexpr size_t kIdxLAnkleRoll  = 1;
+    static constexpr size_t kIdxRAnklePitch = 6;
+    static constexpr size_t kIdxRAnkleRoll  = 7;
 
     // 接收到的关节状态
     std::array<float, kNumMotors> last_positions_;

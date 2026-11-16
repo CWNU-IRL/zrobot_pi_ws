@@ -13,6 +13,7 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "srv/RobStrideMsgs.srv"
   "srv/SetZeros.srv"
   "srv/GetPositions.srv"
+  "srv/DisableMotors.srv"
   )
   
 if(BUILD_TESTING)

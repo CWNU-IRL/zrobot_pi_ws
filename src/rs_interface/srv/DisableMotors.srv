@@ -1,0 +1,4 @@
+# 请求：空 = 失能全部23个电机（关节超限等安全保护触发）
+---
+bool success
+string message
